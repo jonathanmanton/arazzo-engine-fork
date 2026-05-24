@@ -182,33 +182,34 @@ create a separate "city" repo. Either:
 - Initialize a local-only git repo for the city and just accept it dies with the
   container (only OK for throwaway demos).
 
-### 4.3 Auth for spawned `claude` subprocesses is the big unknown
-This is the **single most likely thing to block you**. Findings from this session:
-- There is **no `ANTHROPIC_API_KEY`** in the environment.
-- Auth is via `CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR` — an open file descriptor passed
-  to the parent claude process, not a file path on disk.
-- `ANTHROPIC_BASE_URL` is set (proxy-managed by the host).
-- There is no `~/.claude/` directory.
+### 4.3 Auth for spawned `claude` subprocesses — RESOLVED, it works
+**Originally flagged as the single most likely blocker. Verified working 2026-05-24
+and the previous agent updated this section after the test.**
 
-What this means in practice: **a `claude` process spawned from inside tmux by `gc`
-probably will not inherit working credentials**, because the OAuth FD is held by your
-parent process and tmux does not forward arbitrary FDs across `new-session`.
-
-Before declaring the install successful, **test this in isolation**:
+Test that was run:
 ```bash
-tmux new-session -d -s authtest 'claude -p "say hi" > /tmp/authtest.out 2>&1'
-sleep 5
-tmux ls; cat /tmp/authtest.out
+tmux new-session -d -s authtest 'claude -p "reply with the single word: pong" > /tmp/authtest.out 2>&1; echo EXIT=$? >> /tmp/authtest.out'
+# wait for /tmp/authtest.out to contain EXIT
+cat /tmp/authtest.out
+# → pong
+# → EXIT=0
 ```
-If that fails with an auth error, you have three options to discuss with the user:
-1. Ask them to provide an `ANTHROPIC_API_KEY` env var via the sandbox's environment
-   variables config (best path — durable across container rebuilds).
-2. Use a different agent provider (codex/gemini) — but neither is installed and they'd
-   bring their own auth question.
-3. Try `claude --bare --settings <apiKeyHelper>` — see `claude --help` for the bare-mode
-   auth contract. Heavier lift.
 
-Do not skip this check. Everything downstream depends on it.
+Why it works (best inference): `ANTHROPIC_BASE_URL` is set to a host-managed proxy and
+is inherited by subprocesses through normal env-var inheritance, and the proxy
+authenticates based on container identity rather than per-process credentials. The
+OAuth file descriptor (`CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR`) is *not* needed by
+spawned processes — they go through the proxy.
+
+Practical implication: Gas City can spawn `claude` inside rigs and tmux runtimes
+without us needing to provision an `ANTHROPIC_API_KEY`. Treat this as resolved unless
+you see authentication errors come back from agent runs, in which case re-test with the
+snippet above and reopen the question.
+
+Note for situational awareness:
+- There is no `ANTHROPIC_API_KEY` in env.
+- There is no `~/.claude/` directory.
+- `ANTHROPIC_BASE_URL` is set (do not unset it — that's what's making this work).
 
 ### 4.4 You can't truly "attach" a tmux session interactively
 `gc session attach mayor` is meant for a human at a TTY. Neither you nor the user has a
@@ -257,20 +258,21 @@ curl -fsI https://go.dev/dl/go1.25.linux-amd64.tar.gz | head -1
 curl -fsI https://github.com/gastownhall/gascity | head -1
 ```
 
-### Step 2 — Confirm spawned-claude auth (5 min — DO NOT SKIP)
-**Why:** see §4.3. If this fails, nothing else matters.
+### Step 2 — Re-confirm spawned-claude auth (1 min — quick sanity, was previously verified)
+**Why:** see §4.3. Originally flagged as the single most likely blocker; verified
+working on 2026-05-24. Re-run this in case the container/proxy state changed; if it
+still passes you can move on quickly.
 
 ```bash
 tmux kill-session -t authtest 2>/dev/null
 tmux new-session -d -s authtest 'claude -p "reply with the single word: pong" > /tmp/authtest.out 2>&1; echo EXIT=$? >> /tmp/authtest.out'
-# wait for it
 until [ -s /tmp/authtest.out ] && grep -q EXIT /tmp/authtest.out; do sleep 2; done
 cat /tmp/authtest.out
-tmux kill-session -t authtest
+tmux kill-session -t authtest 2>/dev/null
 ```
-- If output contains "pong" and `EXIT=0`: proceed.
-- Otherwise: stop, capture the error, present it to the user, and ask how they want to
-  provide credentials (see §4.3 options).
+- Expected: `pong` followed by `EXIT=0`.
+- If it now fails: stop, capture the error, surface to the user. The previous "what
+  to do if it fails" options are in §4.3's git history.
 
 ### Step 3 — Install Go 1.25+ to $HOME (5 min)
 **Why:** gascity requires it; we don't have root for `/usr/local/go`.
@@ -408,7 +410,9 @@ So you don't contradict yourself:
 
 In rough order of likelihood:
 
-1. **Spawned `claude` has no credentials** (§4.3). Most likely blocker.
+1. ~~**Spawned `claude` has no credentials** (§4.3). Most likely blocker.~~
+   Resolved 2026-05-24 — works via `ANTHROPIC_BASE_URL` proxy. Re-test if errors
+   reappear.
 2. **`make install` writes `gc` somewhere not on PATH.** Find it with
    `find / -name gc -type f -executable 2>/dev/null` and adjust PATH.
 3. **`city.toml` defaults to a non-tmux runtime provider** or to `bd` Beads despite
