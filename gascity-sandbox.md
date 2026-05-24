@@ -17,6 +17,15 @@ Single source of truth for what's actually been done. **Update this every time y
 progress** so the next agent (or a future you, after compaction) doesn't have to
 reverse-engineer state from git history.
 
+- **2026-05-24** — **Intent clarified by the user (major change).** The user will NOT
+  operate the city. They will not open a shell, attach a tmux session, or run
+  `bd create`. The agent runs everything. The actual deliverable is a *good city
+  configuration* designed for learning and demonstration, which the user will later
+  drop onto their laptop and expect to "just work" (modulo OS-level differences like
+  Homebrew vs apt). See completely rewritten §1.
+- **2026-05-24** — Added lago-morph "Gas City deep dive" to §10 references. It's the
+  best architectural map of gascity currently available and you should skim §0–§2 and
+  §4 of it before designing the city config.
 - **2026-05-24** — Spawned-claude-via-tmux auth verified working (see §4.3). The
   `ANTHROPIC_BASE_URL` proxy authenticates subprocesses transparently — no API key
   needed. This had been flagged as the single most likely blocker; it isn't.
@@ -26,55 +35,160 @@ reverse-engineer state from git history.
   for this repo so nothing to babysit there.
 
 **Not yet done** (i.e. Step 1 onward in §5 is all still pending):
+- Read the lago-morph deep dive end-to-end (§10) before designing the pack.
 - Outbound network confirmation (`curl` go.dev and github.com).
 - Go 1.25 install to `$HOME`.
 - `gc` build from source.
 - City init, controller start, rig add.
-- Decision on where the city lives (§6 Open Decision #1) — user has not answered.
+- **Design the pack** — the laptop-portable deliverable. This is the actual goal now,
+  not "set up a playground." See §1 and §1a.
 
 ---
 
 ## 1. What the user actually wants
 
-Direct quotes from the conversation so you have the tone right:
+**This section was substantially rewritten 2026-05-24 after the user clarified intent.
+The earlier framing ("set up a playground the user observes") was wrong.** Direct
+quotes:
 
-> "Are you allowed to start independent Claude code sessions in your sandbox? And
-> control them via tmux?"
+> "I do not intend to ever run anything against the city. I will ask the agent to do
+> it. I do not want shell access, I do not want to connect to sessions, none of that.
+> I want the main agent I am talking to do that."
 
-> "The reason I'm asking is because of this project, https://github.com/gastownhall/gascity ,
-> that uses tmux to communicate with agents. It uses git for saving context. Tell me if
-> you think it is possible to set this thing up on your sandbox. Not for production, but
-> so you can directly observe and debug it while we work together configuring a city and
-> some rigs."
+> "The agent running this city is figuring out a good configuration for the city for
+> learning and demonstration use so that later when I set it up on my laptop using that
+> configuration it 'just works' (within reason — but I want it to be OS differences and
+> things like that which has to be debugged, not the gascity configuration itself)."
+
+Earlier in the conversation, before this clarification:
+
+> "Tell me if you think it is possible to set this thing up on your sandbox. Not for
+> production, but so you can directly observe and debug it while we work together
+> configuring a city and some rigs."
+
+(That "we work together" framing has been narrowed: the user is the product manager,
+the agent is the operator.)
+
+### The operating model
+
+```
+┌────────────────┐  high-level requests  ┌──────────────┐   runs everything   ┌─────────────┐
+│      USER      │ ────────────────────▶ │    AGENT     │ ──────────────────▶ │  GAS CITY   │
+│ (this is jonathan@) │                     │ (you)        │                     │  (in sandbox) │
+│ Never touches  │ ◀──────────────────── │ Reports back │ ◀────────────────── │             │
+│ shell or tmux  │  observations,        │ Holds context│   logs, beads,      │             │
+└────────────────┘  recommendations,     └──────────────┘   pane captures     └─────────────┘
+                    questions
+```
+
+- The user **never** runs `gc`, `bd`, `tmux`, or any sandbox shell command.
+- The user does not attach to the mayor or any other session.
+- The user does not need to know the city is in `/home/user/arazzo-engine-fork/...` or
+  that `gc start` is running in background tmux session `foo`. Those are agent-internal
+  implementation details.
+- All operational state, all debug info, all "is it working" judgments come from the
+  agent, in chat, in plain language.
+
+### The deliverable (this is the actual goal)
+
+The artifact you are producing is **a Gas City configuration that is portable to the
+user's laptop**. Concretely, by the time this work is "done," there should be:
+
+- A **pack** (the laptop-portable part) committed to the fork repo — see §1a for what
+  this means and §2 for the three-file separation pattern lago-morph documents.
+- A `city.toml` that demonstrates the configuration meaningfully, with comments that
+  explain *why* each section is there.
+- One or more demonstration **rigs** (or rig templates) that exercise interesting
+  multi-agent behavior.
+- A short **README inside the pack directory** telling the user what to install on
+  their laptop (Homebrew commands, `gc` build steps, etc.) and what one command to
+  run to bring the city up locally. This README is the only thing the user reads
+  before trying to use the deliverable.
+- Whatever the user runs on their laptop after following that README should work
+  without them having to debug the *gascity configuration* itself. OS-level issues
+  (Homebrew vs apt, path differences, tool versions) are acceptable; config bugs are
+  not.
 
 ### Interpreted objectives (in priority order)
 
-1. **Get Gas City installed and running inside this remote Claude Code sandbox.**
-   Not on the user's laptop — *here*, in your ephemeral container, because the user wants
-   an agent (you) to be able to *directly observe* it while they configure it.
+1. **Design a learning-and-demonstration city configuration.** This is the work. The
+   sandbox is a lab to develop and validate that configuration; it is not the
+   deliverable. The configuration *is* the deliverable.
 
-2. **Make the "mayor" session reachable for observation/debug.** The user is not trying
-   to admin a fleet. They want a working playground where they can issue `bd create`
-   orders and a city/rigs/mayor will respond, and where you can read the state and
-   explain what's happening.
+2. **Operate the city fully on the user's behalf** to validate that configuration. The
+   agent does the installs, runs `gc`, issues orders via `bd create`, reads mayor pane
+   output, etc. The user only ever sees natural-language summaries from the agent.
 
-3. **Iteratively configure "a city and some rigs" together with the user.** This is
-   collaborative, not a one-shot install. After the install lands, expect a back-and-forth
-   like "ok now add a rig at X", "now create a formula that does Y", "why did the mayor
-   do Z." Optimize the setup so you can answer those questions quickly.
+3. **Optimize for "drop it on a laptop and it just works."** Concretely:
+   - Use the three-file separation lago-morph recommends: `pack.toml` (portable),
+     `city.toml` (deployment), `.gc/` (machine-local, gitignored).
+   - Avoid hardcoding container-specific paths in the pack. Use relative paths or
+     well-documented placeholders the laptop user can swap.
+   - Don't bake in `ANTHROPIC_BASE_URL` proxy assumptions — the laptop will use a
+     different auth path (Claude Code OAuth or `ANTHROPIC_API_KEY`).
+   - Document every assumption the config makes about its host (tools, versions,
+     filesystem layout, network).
 
-4. **(Implicit) Don't blow money or break things.** "Not for production" is a green light
-   to skip resilience, but it is *not* a green light to leave a free-running multi-agent
-   loop unattended in a billed cloud sandbox. Default to conservative loop limits and
-   make sure the user is in the driver's seat for anything that spawns child `claude`
-   processes.
+4. **Demonstrate progressive activation** (lago-morph §4) — start with the minimum
+   useful city, then add features (pools, mail, formulas, orders, health) in a way
+   that's pedagogically obvious. A learner reading the pack should see "ah, this is
+   the level 0 setup, this is the level 2 add-on."
 
-### What the user is **not** asking for
+5. **Don't blow money or break things.** Since the user is not in the loop on every
+   command, the agent owns cost discipline. Set explicit concurrency caps, time
+   bounds on convergence loops, and a "stop if cost crosses $X" mental budget. Pause
+   and ask if you're about to spin up something that might fan out.
 
-- They are not asking you to package or productionize gascity.
-- They are not asking you to contribute upstream to gastownhall/gascity.
-- They are not asking for a writeup of gascity's architecture for its own sake.
-- They are not asking for a CI/automation setup. The whole point is interactive debug.
+### What the user is explicitly **not** asking for
+
+- Not asking for shell access, tmux attach, or any direct sandbox interaction.
+- Not asking to "watch the mayor" themselves — the agent watches and reports.
+- Not asking to productionize gascity or contribute upstream.
+- Not asking for a writeup of gascity's architecture for its own sake (but you must
+  understand it well enough to produce a good config — see §10 references).
+- Not asking for a CI setup on the deliverable.
+- Not asking for the configuration to anticipate hosting models beyond
+  "personal laptop." (Multi-user, cloud hosting, etc. are explicitly out of scope.)
+
+---
+
+## 1a. The "portable pack" — what makes a config laptop-portable
+
+This is the core technical problem this work has to solve. Read lago-morph §4 (cited
+in §10) for the canonical version; this is the operational summary for our context.
+
+Gas City separates configuration into three layers:
+
+| File / dir | What lives here | Portable? | Commit to repo? |
+|---|---|---|---|
+| `pack.toml` (plus prompt templates, formula files) | Agents, formulas, identity, prompts. The "what this city does." | **Yes — fully portable.** | **Yes.** This is the deliverable. |
+| `city.toml` | Deployment-specific: rigs, capacity, providers, paths. | Partially. Templated/commented for laptop use. | Yes, but with explicit notes on what to edit. |
+| `.gc/` | Runtime state, sockets, event log, machine-local bindings. | **No.** Machine-local. | **No.** Gitignore it. |
+
+**Portability rules that the configuration must follow:**
+
+1. **Pack must not assume any absolute path.** No `/home/user/...`, no `/opt/...`.
+2. **Pack must not assume `ANTHROPIC_BASE_URL` is set.** The laptop will auth
+   differently. If the pack needs a specific auth mode, document it in the pack README,
+   don't bake env-specific values in.
+3. **Pack must not assume Linux.** Avoid Linux-only shell idioms in any `exec` blocks.
+   `bash` is fine (Mac has it); GNU-only flags (`sed -i`, `date --iso-8601`) are not.
+4. **Pack must not assume Beads provider.** Default to `file` Beads (works everywhere,
+   no dolt install). If you want to demonstrate the `bd` provider, do it in a separate,
+   clearly-labeled "advanced" variant of the city.toml.
+5. **city.toml is allowed to have laptop-specific values**, but every such value must
+   be commented with what to change. Example:
+   ```toml
+   [workspace]
+   # Path to the workspace root. Change to wherever you cloned the pack on your laptop.
+   root = "./workspace"
+   ```
+6. **Document tool prerequisites in the pack README** with exact install commands for
+   macOS (Homebrew) and Linux (apt). The user's laptop is unknown; cover both.
+
+**Test of portability:** the agent should be able to mentally simulate "user runs
+these N commands on a fresh macOS laptop with Homebrew" and predict success. If you
+can't, the pack isn't done yet.
 
 ---
 
@@ -244,13 +358,24 @@ live TTY into this sandbox. Workaround:
 - When the user asks "what is mayor doing?", capture the pane and relay the contents
   with file references. Do *not* claim to be "watching" it — you're sampling it.
 
-### 4.5 Cost discipline
-Multi-agent loops can fan out fast. Before issuing the first `bd create` that triggers
-real agent work:
-- Confirm with the user how many concurrent agents they want allowed.
-- Check `city.toml` for any concurrency/budget knobs (`max_concurrent`, budget caps,
-  etc. — names TBD, audit the schema after `gc init`).
-- Default to **one** rig and **one** in-flight order until the user explicitly opts up.
+### 4.5 Cost discipline — the agent owns this, not the user
+Per the updated §1 intent, the user is not in the loop on individual commands. That
+means **you** own preventing runaway agent fan-out. There is no "ask the user before
+each `bd create`" safety net.
+
+Concrete rules:
+- Default the pack to **1** concurrent agent per rig, **1** in-flight order at a time.
+- Set explicit time bounds on convergence loops (`max_iterations`, cooldown periods —
+  check the lago-morph deep dive §7 for the actual config keys).
+- Before issuing any order that triggers an `exec` block calling `claude`, mentally
+  estimate: "if this loops 10x, what's the cost?" If the answer is more than a few
+  dollars, pause and surface a plan to the user *before* dispatching.
+- Watch for the `.gc/events.jsonl` unbounded-growth gotcha (lago-morph "Critical
+  Gotchas") — if you're running a lot of iterations, periodically check disk and
+  rotate if needed.
+- If you hit a situation where the controller is spawning more agents than expected,
+  `gc stop` (or kill the controller process) first, diagnose second. Don't let it run
+  while you investigate.
 
 ---
 
@@ -378,39 +503,83 @@ git commit --allow-empty -m "init rig"
 GC_BEADS=file gc rig add .
 ```
 
-### Step 8 — Hand control back to the user
-**Why:** §1 priority 3 — this is collaborative from here. The user wants to drive
-`bd create` themselves (or have you do it on their instruction) and watch the mayor's
-reaction.
+### Step 8 — Validate the smoke test, then start designing the pack
+**Why:** §1 intent says the deliverable is a *portable pack*, not a running city. By
+this step you have a working sandbox installation; now the real work begins.
 
-At this point your job is to summarize:
-- Where the city lives, where the rig lives, what `gc start` is doing.
-- How to read the mayor's pane (`tmux capture-pane -t mayor -p`).
-- What budgets/limits are in place.
-- The Step 2 auth recheck result (expected: still working — was verified 2026-05-24).
-- What to commit to the branch before the container idles out.
+#### 8a. Smoke test (agent runs it, reports findings)
+Issue a trivial `bd create` ("print hello world") against the throwaway rig from Step 7,
+let the mayor pick it up, and capture the result. Confirm end-to-end:
+- Order shows up in the bead store.
+- Mayor reconciles and dispatches.
+- `claude` subprocess runs (auth proxy still works in this context).
+- Output is captured somewhere readable (event log, pane capture, or rig commit).
 
-Then **wait for instructions**. Do not start issuing orders on your own.
+Report to the user in chat:
+- One-paragraph "the smoke test worked, here's what happened."
+- Specific paths to anything useful (`.gc/events.jsonl`, mayor pane capture, etc.) so
+  the user can ask follow-up questions like "show me what the mayor said when X."
+
+#### 8b. Pack design (the actual deliverable)
+Once smoke test passes, **stop using the throwaway rig** and start building the real
+deliverable: a `pack.toml` + accompanying prompt templates + a documented `city.toml`
+that demonstrates Gas City's capabilities for a learner.
+
+Read lago-morph §4 first. Then propose a pack design to the user — probably as a short
+chat message listing:
+- What level of progressive activation the pack will target (start small; level 0–2 is
+  probably enough for a demo).
+- What agents/roles are in the pack and what they do.
+- What formulas demonstrate interesting multi-agent behavior.
+- What the pack's README will tell the laptop user to install and run.
+
+Get user buy-in on that plan before writing 500 lines of TOML. Then build it iteratively,
+validating each piece in the sandbox before moving on.
+
+#### 8c. The pack lives in the fork repo
+Specifically, recommend `/home/user/arazzo-engine-fork/gascity-sandbox/pack/` for the
+pack itself, separate from `cities/bright-lights/` (which is the local
+deployment-specific `city.toml`). The pack gets committed and pushed; the city.toml
+gets committed *as a reference example* with comments showing what to change for a
+laptop install; the `.gc/` runtime state is gitignored.
 
 ---
 
-## 6. Open decisions the user has NOT made yet
+## 6. Decisions — what to decide yourself vs what to ask
 
-Ask about these the moment you're ready to start — don't guess.
+Under the updated §1 intent, the user is the product manager, not the operator. Most
+implementation choices are now yours to make and report on, not yours to ask. **Default
+to deciding and informing; only escalate when the choice is product-shaped.**
 
-1. **Where should the city live?** Recommended: inside the fork at
-   `gascity-sandbox/cities/bright-lights/`. Alternative: throwaway location outside
-   the repo, accepting that it dies with the container.
-2. **Which agent provider for the rigs?** Only `claude` is installed and it has
-   working auth via the host proxy (see §4.3). codex/gemini would require both an
-   install and a separate auth story — default to `claude` unless the user pushes
-   otherwise.
-3. **Concurrency cap.** Default to 1. Confirm before raising.
-4. **What real work do they want to try first?** "hello world" is the README example;
-   the user may have something more concrete in mind given they mentioned "configuring a
-   city and some rigs."
-5. **Should the gascity source clone be gitignored inside the fork or kept in /tmp?**
-   Recommend gitignored-in-fork.
+### Decide yourself (just report what you did)
+- **Where the sandbox install lives.** Use `/home/user/arazzo-engine-fork/gascity-sandbox/`.
+  Subdirs: `gascity/` (source clone, gitignored), `cities/bright-lights/` (local city),
+  `rigs/...` (smoke-test rigs), `pack/` (the deliverable). Mention this layout to the
+  user once; don't re-ask.
+- **Agent provider.** `claude`, because it's installed and auth works. Don't even bring
+  up codex/gemini unless the user does.
+- **Beads provider.** `file` for the pack default; `bd`/dolt only if you find a concrete
+  demonstration need (and even then, document it as an "advanced" variant).
+- **Concurrency cap.** 1 per rig, 1 in-flight order at a time, until you have a
+  specific reason to raise it (in which case tell the user why before doing it).
+- **Source clone location for `gascity`.** Inside the fork, gitignored.
+- **Smoke-test rig content.** Throwaway "hello world." Don't ask.
+- **What gets committed.** Pack, city.toml (as reference), gitignore. Not: cloned
+  upstreams, `.gc/` runtime state, tmux sockets, log files over a few KB.
+
+### Ask the user (these are product-shaped)
+- **What the pack should demonstrate.** Multi-agent coordination on what kind of task?
+  Code review? Refactor pipelines? Issue triage? The user mentioned "learning and
+  demonstration" — get one or two sentences from them on the audience and use case.
+- **Pack identity / naming.** What is this pack called? Who is it "by"? The pack will
+  end up in a public repo; the user may have opinions.
+- **How ambitious to be on day one.** "Minimum viable demo" (one agent, one formula)
+  vs. "show off several capabilities" (multiple roles, formulas, orders, health). Both
+  are valid; user picks the bar.
+- **When you hit a config choice that shapes the laptop UX.** E.g., "do you want the
+  pack README to assume Homebrew or also document apt?" Ask.
+- **Before any operation that might cost more than ~$1 in agent calls.** Surface the
+  plan first.
 
 ---
 
@@ -491,19 +660,71 @@ Stop there and inspect `bright-lights/city.toml` before continuing.
 
 ## 10. Useful references
 
-- Project: https://github.com/gastownhall/gascity
-- README (raw): https://raw.githubusercontent.com/gastownhall/gascity/main/README.md
-- README mentions `docs/` in the repo — read those once cloned for installation,
-  tutorials, and architecture deep-dives.
-- Predecessor name: "Gas Town" — search the repo's issues/discussions for context if
-  something behaves unexpectedly.
+### Primary — read these before designing the pack
+
+- **lago-morph "Gas City Deep Dive"** —
+  https://github.com/lago-morph/software-factory/blob/main/research/followup/13-gas-city-deep-dive.md
+  Independent architectural deep-dive (May 2026), with file-path citations into the
+  gascity repo. This is the best single document for understanding *how to design a
+  good pack*. Required reading. Sections most relevant to our work:
+  - **§0 & §1** — positioning. "ZERO hardcoded roles" is the key insight: all role
+    behavior comes from user config and Markdown prompts, never from Go code. The
+    pack is everything.
+  - **§2 (Nine Concepts)** — canonical mental model. Layer 0–1 primitives (Session,
+    Bead Store, Event Bus, Config, Prompt Templates) and Layer 2–4 derived mechanisms
+    (Messaging, Formulas/Molecules, Dispatch/Sling, Health Patrol).
+  - **§4 (Configuration)** — `city.toml` structure, **the three-file separation
+    (`pack.toml` / `city.toml` / `.gc/`)**, progressive activation levels 0–8, and
+    the six-level override cascade. **This is the playbook for portability.**
+  - **§5 & §6** — runtime providers (tmux is the right one for us) and beads
+    topology. Beads is the universal persistence substrate.
+  - **§7 (Workflow Primitives)** — formulas, molecules, wisps, orders, sling,
+    convergence loops. The most complex section; the pack will live here.
+  - **§8 (Controller Loop)** — the reconciler. Critical for debugging anything
+    going wrong with mayor reconciliation.
+  - **§19 (Quick Reference)** — cheat sheet once you've internalized §2.
+  - **Critical Gotchas** to internalize: in-memory crash tracker (controller restart
+    clears quarantine), no cascading restarts, sling shell-exec'd serial, no retry on
+    order dispatch failure, `.gc/events.jsonl` unbounded growth, controller socket
+    has no auth.
+  - **Design principles** to absorb: ZFC (Zero Framework Cognition), GUPP ("Get Up
+    and Pick Plums"), NDI (Nondeterministic Idempotence), Bitter Lesson alignment.
+
+- **gascity README (raw)** —
+  https://raw.githubusercontent.com/gastownhall/gascity/main/README.md
+  Quickstart, prereq table, install paths.
+
+- **gascity project root** — https://github.com/gastownhall/gascity
+  After cloning, read `docs/` for installation, tutorials, architecture reference, and
+  `AGENTS.md` (referenced by lago-morph as a canonical source).
+
+### Secondary
+
+- Predecessor name "Gas Town" — search the gascity repo's issues/discussions for
+  context if something behaves unexpectedly.
+- lago-morph deep-dive cites two companion docs (Gas Town deep-dive, Gas Systems
+  Substrate) that place Gas City in the wider ecosystem; reach for them if the user
+  asks ecosystem-level questions.
 
 ---
 
-## 11. Final note on tone
+## 11. Final note on tone and working style
 
 The user is technical, decisive, and prefers terse exchanges with a recommendation and
 the main tradeoff up front. They asked the previous agent a yes/no question and got a
-clean yes/no + caveat table back; they liked that enough to ask for this handoff. Mirror
-that style: don't write essays at them, don't ask permission for trivial things, do ask
-before anything that spawns child agents or commits something they haven't seen.
+clean yes/no + caveat table back; they liked that enough to ask for this handoff.
+
+Working-style implications under the updated §1 intent:
+- **Decide and inform; don't ask and wait.** They have explicitly delegated operation
+  of the city. Asking "should I install Go now?" wastes their time. Asking "should the
+  pack include a code-review agent or a refactor agent?" is on-topic.
+- **Surface state proactively, briefly.** Short status updates ("smoke test passed,
+  mayor reconciled in 8s, transcript in `.gc/events.jsonl`") beat long ones. They will
+  ask follow-ups if they want more.
+- **Commit and push frequently.** The container is ephemeral; the user has explicitly
+  asked for "commit and push everything asap" once already in this thread. When you
+  reach a stable point, push without being asked.
+- **When you do ask, ask product questions, not implementation questions.** "What
+  should the demo show?" not "what should I name the agent role?"
+- **Don't narrate internal deliberation** in chat. They get tool calls summarized; a
+  text reply should be a result or a question, not a thinking log.
