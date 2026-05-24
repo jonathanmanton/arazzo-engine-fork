@@ -30,13 +30,25 @@ are settled unless the user reopens them.
   github repos instead of local ones, and off we go."* The Dockerfile + pack + README
   IS the deliverable. Docker daemon was confirmed working in the prior sandbox (root,
   Ubuntu 24.04, `docker info` healthy); re-verify in yours.
-- **Sandbox vs laptop topology** (clarified by user):
-  - **On the sandbox:** the agent creates local git repos for the pack, for dolt
-    data, and for each demo rig. The agent commits frequently and pushes to
-    GitHub remotes so artifacts survive container reclaim.
-  - **On the laptop:** all of those are GitHub repos. The user clones them, builds
-    the docker image, runs the container. If the container dies, the user spins up
-    a fresh one and re-clones — the GitHub repos are the source of truth.
+- **Sandbox vs laptop topology** (locked in after the seed-subdirectory
+  discussion — see §1b for the full rationale):
+  - **Hard constraint:** the sandbox grants the agent write access to exactly
+    ONE GitHub repo (the deliverable repo). Enforced by an Anthropic-managed
+    local git proxy. The user **cannot** lift this; it's not exposed in their
+    config.
+  - **On the sandbox:** the agent develops everything inside the single deliverable
+    repo. Rig source files live in `seed-rigs/<name>/` subdirectories (NO nested
+    `.git/`). The bead store is represented as a dolt SQL dump in
+    `seed-bead-store/init.sql`. The agent commits and pushes the deliverable repo
+    to GitHub frequently — that's the only durability path. Rigs and bead store
+    don't get pushed to their own repos during the sandbox session.
+  - **On the laptop, first run:** user clones the deliverable repo, runs
+    `bootstrap-laptop.sh` which creates per-rig and bead-store GitHub repos from
+    the seed content. From then on, each rig and the bead store are independent
+    GitHub repos.
+  - **On the laptop, subsequent runs:** entrypoint script clones rigs and bead
+    store from their GitHub URLs. Container dies → `docker rm` → fresh container
+    → re-clone → resume. Exactly the user's stated model.
 - **Beads provider: `bd` (dolt-backed), pushed to a GitHub remote via dolt's git-
   remote support.** Dolt v1.81.10 (Feb 2026) added native support for using a Git
   remote as a Dolt remote — built specifically to keep Beads/Gas Town users on
@@ -394,39 +406,83 @@ source-of-truth systems — GitHub holds everything.
   the local paths don't exist; on subsequent starts (volume mount survival), it
   fetches updates.
 
-### Rigs (plain git repos — unchanged from before)
+### Rigs and bead store — one sandbox repo, separate laptop repos via bootstrap
 
-- Each rig is a regular git repo added to the city via `gc rig add <path>`.
-- Sandbox: `git init` each rig locally, `git remote add origin git@github.com:...`,
-  push frequently.
-- Laptop: user `git clone`s each rig repo into a directory the container clones at
-  start.
-- **Git worktrees are NOT a gascity SDK feature** (lago-morph deep dive §15). Don't
-  introduce them in v1 of the pack; pack scripts can call `git worktree add` from a
-  `pre_start` hook if a later demo needs parallel agent work on the same rig.
+**Hard constraint (decided by user, can't be changed):** the sandbox grants the agent
+write access to exactly **one** GitHub repo — the deliverable repo. This is enforced
+by an Anthropic-managed local git proxy at `127.0.0.1:<port>` that rewrites `origin`
+and gates which repos accept push/fetch. The user **cannot** lift this restriction
+from their side; it's part of the platform's sandbox configuration.
 
-### Layout sketch (one possible structure for the deliverable repo)
+Combined with two facts established above —
+1. Each rig should be its own git repo (its own commit history for the agent's work
+   product; clean separation of `.beads/` runtime state; matches gascity's expected
+   pattern; nested git repos inside the deliverable repo don't work cleanly).
+2. The dolt bead store needs its own GitHub repo too, because dolt's git-remote
+   support pushes to a *whole* repo, not a subdirectory.
+
+— this leads to exactly one workable plan:
+
+**Sandbox side:** the agent develops everything inside the single deliverable repo,
+with rig source files in `seed-rigs/<name>/` subdirectories (NO nested `.git/`) and
+the bead store represented as a dolt SQL dump in `seed-bead-store/init.sql`. The
+agent commits and pushes the deliverable repo to GitHub frequently — that's the only
+durability path. Rigs and bead store don't get pushed anywhere during the sandbox
+session; they ride along inside the deliverable repo.
+
+**Laptop side, first run:** the user clones the deliverable repo from GitHub, then
+runs `bootstrap-laptop.sh` (shipped in the deliverable repo). That script:
+1. For each `seed-rigs/<name>/` dir: copies the content out, `git init`s a fresh
+   repo, commits, creates a GitHub repo (via `gh repo create` or user-provided
+   URL), `git remote add origin`, pushes.
+2. For `seed-bead-store/init.sql`: `dolt init` a fresh DB, replays the SQL,
+   creates a GitHub repo, `dolt remote add origin`, `dolt push origin main`.
+3. Writes the resulting URLs into the user's local `city.toml` (or sets them as
+   env vars consumed by `docker compose`).
+
+**Laptop side, every subsequent container start:** entrypoint script inside the
+container reads URLs from city.toml/env, does `git clone <rig-url>` for each rig
+and `dolt clone <bead-store-url>` for the bead store, then `gc start`. Container
+dies → `docker rm` → spin up a fresh container → entrypoint re-clones from the
+GitHub repos → resume. Exactly the model you wanted.
+
+**Why this works without lifting the sandbox restriction:** the agent only ever
+pushes to one repo (the deliverable). All other GitHub repos are created and
+populated *from your laptop*, where there's no sandbox restriction.
+
+### Git worktrees note (unchanged)
+Git worktrees are NOT a gascity SDK feature (lago-morph deep dive §15). Don't
+introduce them in v1 of the pack; pack scripts can call `git worktree add` from
+a `pre_start` hook if a later demo needs parallel agent work on the same rig.
+
+### Layout (the locked-in structure for the deliverable repo)
 
 ```
-<deliverable-repo>/                   ← user-created GitHub repo
+<deliverable-repo>/                   ← user-created GitHub repo (the ONE repo the agent pushes to)
 ├── Dockerfile                        ← ubuntu base, installs Go, gascity, dolt, git, tmux, claude
 ├── docker-compose.yml                ← brings the container up (compose preferred per user)
 ├── README.md                         ← one-screen "how to run on your laptop"
-├── entrypoint.sh                     ← clones rigs + dolt bead store from GitHub on first run
+├── entrypoint.sh                     ← clones rigs + dolt bead store from GitHub on container start
+├── bootstrap-laptop.sh               ← run ONCE on first laptop setup; creates per-rig + bead-store GitHub repos
 ├── pack/                             ← the portable pack (agents, formulas, prompts)
 │   ├── pack.toml
 │   ├── prompts/
 │   └── formulas/
-├── city.toml.example                 ← deployment-specific template; rig/bead URLs as variables
+├── city.toml.example                 ← template; rig and bead-store URLs as variables
+├── seed-rigs/                        ← rig source files for laptop bootstrap (NO nested .git/)
+│   ├── rig-alpha/
+│   └── rig-beta/
+├── seed-bead-store/                  ← dolt-dump SQL snapshot of bead store at handoff
+│   └── init.sql
 ├── reference-only/                   ← supporting docs (NOT consumed by gascity)
 │   └── lago-morph-13-gas-city-deep-dive.md
-├── gascity-sandbox.md                ← this handoff doc (optional retention)
-└── (rigs and bead store live in SEPARATE GitHub repos referenced from city.toml)
+└── gascity-sandbox.md                ← this handoff doc (optional retention after read)
 ```
 
-Separate GitHub repos for each rig and for the bead store match the user's "all
-GitHub repositories" phrasing and force you to design `city.toml` around URLs (the
-GitHub-flip portability property).
+The trade-off vs. separate repos from day one: one extra script (`bootstrap-laptop.sh`)
+the user runs once on their laptop, and the bead store snapshot is "as of the last
+sandbox session" rather than continuously live-synced. Both are acceptable given the
+sandbox restriction.
 
 ### Sandbox-side scratch dir vs deliverable repo
 
@@ -549,30 +605,37 @@ shape every decision.
 
 ### 4.1 The sandbox is ephemeral
 Container is reclaimed on idle or session end. **Anything that needs to survive must
-be pushed to a GitHub remote** — the deliverable repo for the pack/Dockerfile/etc.,
-and (per §1b) separate GitHub repos for each rig if you go with the separate-rig-repos
-layout. That includes:
-- The Dockerfile, pack, `city.toml` template, README.
-- Each rig's source tree (committed in its own GitHub repo).
-- Bead store (if you go with Path A `file` Beads — committed in either the
-  deliverable repo or its own repo).
-- Notes, scratch files, this very document — committed in the deliverable repo.
+be pushed to the one deliverable GitHub repo you have access to** (see §4.2). That
+includes:
+- The Dockerfile, docker-compose.yml, README, entrypoint.sh, bootstrap-laptop.sh.
+- The pack (`pack/...`), `city.toml.example`, the handoff doc, `reference-only/`.
+- Each rig's source files in `seed-rigs/<name>/` (NO nested `.git/` — see §1b).
+- The dolt bead store snapshot in `seed-bead-store/init.sql`, regenerated
+  periodically via `dolt dump` from inside the running container.
 
 Things that *don't* need to survive and shouldn't be committed:
 - The Go install (re-downloadable; lives inside the container's image layers anyway).
 - The `gascity` source clone (re-buildable; image build clones during `docker build`).
-- `tmux` sockets, `~/.cache`, runtime `.gc/`, dolt server port files.
+- `tmux` sockets, `~/.cache`, runtime `.gc/`, the live dolt data directory,
+  dolt server port files.
 
 **Practical rhythm:** every time a pack/config/Dockerfile change reaches a working
-state, commit and push. Treat git history as your durability log. The sandbox can
+state, commit and push to the deliverable repo. Refresh the `seed-bead-store/init.sql`
+snapshot before pushing whenever bead state matters for handoff. The sandbox can
 vanish at any time; nothing in the container or on the sandbox host survives.
 
-### 4.2 GitHub MCP scope
-Your GitHub MCP tools may be scoped to one repo at a time by the sandbox's session
-configuration. Check the system reminders you got at startup to confirm which repo
-you have write access to (it should be the user's deliverable repo). If you find
-yourself blocked from a repo you need access to, surface that to the user before
-trying workarounds.
+### 4.2 You have access to exactly one GitHub repo — and it can't be widened
+Two layers enforce this:
+- **GitHub MCP tools** (PR APIs, comments, etc.) are scoped to one repo. Check the
+  startup system reminders to see which one.
+- **`git push` / `fetch` / `pull`** go through an Anthropic-managed local proxy
+  (`http://local_proxy@127.0.0.1:<port>/git/<owner>/<repo>`) that rewrites `origin`
+  and only allows that same one repo.
+
+The user **cannot** widen this scope from their side — it's Anthropic-managed
+sandbox config not exposed to them. Don't propose plans that assume push access to
+multiple repos. The seed-subdirectory + `bootstrap-laptop.sh` pattern in §1b is the
+agreed-on workaround.
 
 ### 4.3 Auth for spawned `claude` subprocesses — RESOLVED, it works
 **Originally flagged as the single most likely blocker. Verified working 2026-05-24
