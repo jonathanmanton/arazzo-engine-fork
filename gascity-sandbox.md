@@ -1,87 +1,96 @@
-# Gas City in this sandbox — handoff
+# Gas City in your sandbox — handoff
 
 **Audience:** the next Claude Code agent who picks this up. You are starting cold; this
 file is the only context you get. Read it end-to-end before touching anything.
 
-**Author of this doc:** previous agent in session, 2026-05-24.
-**User:** jonathan@manton.com.
-**Staging repo (where this doc lives temporarily):** `jonathanmanton/arazzo-engine-fork`,
-branch `claude/sandbox-independent-sessions-gScht`. You are MCP-scoped to this repo
-only for the current session.
-**Deliverable repo:** *to be created by the user* as a brand-new repo with nothing to
-do with arazzo-engine. This handoff doc is what bridges the two — the user will read
-it, create the new repo, and start a fresh agent session there. Treat
-arazzo-engine-fork as a scratchpad for this doc only; do not assume the pack, city,
-or any deliverable artifacts will live here long-term.
+**Author:** a previous Claude Code agent, 2026-05-24.
+**User:** the human you're talking to — they'll introduce themselves.
+
+**Important — this doc is self-contained.** It was originally drafted in a different
+sandbox/repo entirely; that origin is irrelevant and intentionally not referenced
+anywhere. By the time you are reading this, the file lives in the user's actual
+**deliverable repo** (a brand-new repo the user created specifically for this work),
+and that is the only repo you need to think about. There is no upstream relationship,
+no "parent" repo, no other staging area. Treat the deliverable repo as the universe.
 
 ---
 
 ## 0. Progress log (most recent first)
 
-Single source of truth for what's actually been done. **Update this every time you make
-progress** so the next agent (or a future you, after compaction) doesn't have to
-reverse-engineer state from git history.
+Single source of truth for what's been decided and what's still open. **Update this
+every time you make progress** so a future you (after compaction) or your successor
+doesn't have to reverse-engineer state from git history.
 
-- **2026-05-24** — **Deliverable repo is a brand-new user-created repo, NOT
-  arazzo-engine-fork.** PR #1 review: *"Don't talk about the repo. I will create a
-  brand new repo for all of this. ... The new repo will have nothing to do with
-  arazzo-engine."* This handoff doc is the bridge — the user will read it, create
-  the new repo, and start a fresh agent session there. Updated masthead, §1
-  deliverable, and added a new §1b two-repos section to clarify staging
-  (arazzo-engine-fork, scratchpad) vs deliverable (new repo, the real artifact).
-- **2026-05-24** — **Docker-first install decided (user committed).** PR #1 review:
-  *"run everything in a docker container inside the sandbox ... use an ubuntu base
-  ... I just take the Dockerfile that is produced as part of this effort, change
-  some parameters to point to real github repos instead of local ones, and off we
-  go."* Docker daemon confirmed working in the sandbox (root access, dockerd
-  available, `docker info` healthy). The Dockerfile is now part of the deliverable.
-  Inside the container: dolt local-only, rigs as local git repos, structured so
-  flipping to GitHub remotes is a config change not a code change. **§3 inventory
-  and §5 setup plan still need a substantial rewrite for docker-first** — flagged.
-- **2026-05-24** — **Beads provider flipped from `file` to `bd` (dolt-backed).** PR #1
-  review: user wants dolt on their laptop. Dolt runs purely local via `managed_city`
-  mode — no remote required. Updated §1a rule #4 and added a new §1b explaining the
-  local-only persistence model: dolt for beads (SQL server + prefix scoping, not
-  worktrees), plain `git init` for rigs.
-- **2026-05-24** — Fixed an ambiguity in §1 "operating model" diagram (PR #1 review
-  comment): the previous diagram made it look like the main agent and gascity were on
-  separate hosts. They are not — main agent, gascity controller, and all role agents
-  are co-located inside the same sandbox VM, sharing one filesystem and one process
-  table. Also clarified in §4.5 that multiple role agents running concurrently is the
-  *point* of gascity and is not what cost discipline restricts.
-- **2026-05-24** — **Intent clarified by the user (major change).** The user will NOT
-  operate the city. They will not open a shell, attach a tmux session, or run
-  `bd create`. The agent runs everything. The actual deliverable is a *good city
-  configuration* designed for learning and demonstration, which the user will later
-  drop onto their laptop and expect to "just work" (modulo OS-level differences like
-  Homebrew vs apt). See completely rewritten §1.
-- **2026-05-24** — Added lago-morph "Gas City deep dive" to §10 references. It's the
-  best architectural map of gascity currently available and you should skim §0–§2 and
-  §4 of it before designing the city config.
-- **2026-05-24** — Spawned-claude-via-tmux auth verified working (see §4.3). The
-  `ANTHROPIC_BASE_URL` proxy authenticates subprocesses transparently — no API key
-  needed. This had been flagged as the single most likely blocker; it isn't.
-- **2026-05-24** — Sandbox inventory captured (§3). Go 1.25 missing, `gc` not built,
-  everything else needed for file-backed Beads is present.
-- **2026-05-24** — Handoff doc created and pushed as PR #1 (draft). No CI configured
-  for this repo so nothing to babysit there.
+All entries below are decisions made by the user during a prior agent session. They
+are settled unless the user reopens them.
 
-**Not yet done** (i.e. Step 1 onward in §5 is all still pending):
-- Read the lago-morph deep dive end-to-end (§10) before designing the pack.
-- Outbound network confirmation (`curl` go.dev and github.com).
-- Go 1.25 install to `$HOME`.
-- `gc` build from source.
-- City init, controller start, rig add.
-- **Design the pack** — the laptop-portable deliverable. This is the actual goal now,
-  not "set up a playground." See §1 and §1a.
+- **Deliverable structure: a docker container, ubuntu base.** User's words: *"run
+  everything in a docker container inside the sandbox ... I just take the Dockerfile
+  that is produced as part of this effort, change some parameters to point to real
+  github repos instead of local ones, and off we go."* The Dockerfile + pack + README
+  IS the deliverable. Docker daemon was confirmed working in the prior sandbox (root,
+  Ubuntu 24.04, `docker info` healthy); re-verify in yours.
+- **Sandbox vs laptop topology** (clarified by user):
+  - **On the sandbox:** the agent creates local git repos for the pack, for dolt
+    data, and for each demo rig. The agent commits frequently and pushes to
+    GitHub remotes so artifacts survive container reclaim.
+  - **On the laptop:** all of those are GitHub repos. The user clones them, builds
+    the docker image, runs the container. If the container dies, the user spins up
+    a fresh one and re-clones — the GitHub repos are the source of truth.
+- **Beads provider: dolt (`bd`), not `file` — but with a clarification you must
+  resolve.** User wants dolt so the "container dies → re-clone → resume" model works
+  via dolt's git-like ops. **Important reality check:** dolt is NOT git and dolt's
+  remote protocol is NOT compatible with GitHub. Dolt remotes live on DoltHub,
+  DoltLab, or a self-hosted dolt server. So either: (a) use Beads `file` provider
+  (plain JSON files in `.beads/` — trivially git-trackable, pushable to GitHub) and
+  drop the "dolt" framing, or (b) keep Beads `bd`/dolt and add a dolt remote (not
+  GitHub) for the re-clone story. **See §1b for the full explanation; flag to the
+  user before building.**
+- **Agent's role.** User will NOT operate the city. They will not open a shell,
+  attach tmux, or run `bd create`. The agent does all of it. The user is the product
+  manager; their only interface is chat with the agent. See §1.
+- **Docker auth wiring (open question — needs user input).** Inside the container,
+  `claude` needs credentials. In the prior sandbox, the parent agent's claude proc
+  was auth'd via an `ANTHROPIC_BASE_URL` proxy set on the host (no API key visible).
+  On the user's laptop, no such proxy exists — claude needs `ANTHROPIC_API_KEY`.
+  Per the user's question ("how are you switching between proxy URL and API key —
+  are those interchangeable?"): they are **complementary, not interchangeable.**
+  `BASE_URL` says *where* to send requests; `API_KEY` is the *credential*.
+  Recommendation surfaced to user: standardize the Dockerfile on `ANTHROPIC_API_KEY`
+  as the primary input, accept `ANTHROPIC_BASE_URL` as an optional override for
+  proxied/sandboxed environments. **Confirm with user before building.**
+- **Compose vs plain docker (open question — recommended compose).** Volume mounts
+  get verbose with `docker run`. docker-compose is cleaner for README. User said
+  *"Compose is fine if that makes things easier to see."* — interpret as approved.
+- **Pack location at runtime (open question — recommended baked-in, mounted as dev
+  option).** Baked into the image for the demo path, optionally mounted from the host
+  for live-edit development. Awaiting user confirmation.
+- **Operational diagram corrected.** The main agent (you), the gascity controller,
+  and all role agents are co-located inside one Linux box. Multiple concurrent role
+  agents is the *point* of gascity — cost discipline caps pool sizes per role and
+  in-flight order queue depth, not number of distinct roles. See §1 and §4.5.
+- **Spawned-claude-via-tmux auth verified** in the prior sandbox (`tmux new-session
+  -d -s test 'claude -p "say pong"'` returned `pong`). The `ANTHROPIC_BASE_URL` proxy
+  authenticated subprocesses transparently. Re-verify in your sandbox.
+
+**Open work for you:**
+- Resolve the dolt-vs-github confusion (see §1b) with the user before building.
+- Resolve the auth-wiring decision (`ANTHROPIC_API_KEY` as primary) with the user.
+- Confirm pack-runtime-location preference.
+- Read the lago-morph Gas City deep dive end-to-end (local copy at
+  `./reference-only/lago-morph-13-gas-city-deep-dive.md` — see §10).
+- Outbound network confirmation from the sandbox (`curl` go.dev and github.com).
+- Verify docker daemon works in your sandbox; start it if not running.
+- Write the Dockerfile, build the image, bring up gascity inside it.
+- Inside the container: `gc` build, city init, controller start, rig add.
+- **Design the pack** — the actual goal. See §1 and §1a.
 
 ---
 
 ## 1. What the user actually wants
 
-**This section was substantially rewritten 2026-05-24 after the user clarified intent.
-The earlier framing ("set up a playground the user observes") was wrong.** Direct
-quotes:
+Direct quotes from the prior agent session (kept verbatim so you can hear the user's
+voice):
 
 > "I do not intend to ever run anything against the city. I will ask the agent to do
 > it. I do not want shell access, I do not want to connect to sessions, none of that.
@@ -159,8 +168,8 @@ Key things this diagram is asserting (which the previous version got wrong):
 What the user does and doesn't do:
 - The user **never** runs `gc`, `bd`, `tmux`, or any sandbox shell command.
 - The user does not attach to the mayor or any other session.
-- The user does not need to know the city is in `/home/user/arazzo-engine-fork/...` or
-  that `gc start` is running in background tmux session `foo`. Those are your
+- The user does not need to know the city is in `/workspace/...` or that `gc start`
+  is running in background tmux session `foo` inside container `bar`. Those are your
   implementation details to manage and summarize.
 - All operational state, all debug info, all "is it working" judgments come from you,
   in chat, in plain language.
@@ -191,11 +200,14 @@ the time this work is "done," the user's brand-new deliverable repo should conta
   issues (host docker setup, volume mounts, API key wiring) are acceptable; config
   bugs are not.
 
-**The "easy to switch to github remotes later" requirement** (per PR #1 review):
-inside the container, dolt uses a local repo and rigs use local `git init` repos with
-no remotes. The pack and city.toml should be structured so that *flipping to GitHub
-remotes is a config change*, not a code change — e.g. rig URLs in city.toml expressed
-as variables that default to local paths but accept `git@github.com:...` overrides.
+**The "easy to switch to github remotes later" requirement** (user stated): inside
+the container, rigs use local `git init` repos and (provisionally) dolt uses its
+local managed-city mode. The pack and city.toml should be structured so that
+*flipping to GitHub remotes is a config change*, not a code change — e.g. rig URLs
+in city.toml expressed as variables that default to local paths but accept
+`git@github.com:...` overrides. **Caveat:** dolt's own remotes are not GitHub —
+see §1b for the "what does 'github for dolt' actually mean?" discussion you need to
+have with the user.
 
 ### Interpreted objectives (in priority order)
 
@@ -285,99 +297,121 @@ can't, the pack isn't done yet.
 
 ---
 
-## 1b. Local-only persistence — dolt, rigs, and the worktree question
+## 1b. Persistence: local repos on sandbox, GitHub on laptop, and the dolt question
 
-The user raised this in PR #1 review:
+### The user's mental model (must satisfy this)
 
-> "I DO want to use dolt by the time it reaches my laptop. Is it possible for you to
-> create a local git repo (no remote) on the sandbox, and have all agents access it
-> using worktrees? [...] As a matter of fact, you should probably do this with the
-> sample rigs as well. But make sure to frequently save in the main repo their state
-> if it is important for configuration. Since gascity relies so much on git repos the
-> local ones should work — just be aware that everything is transient on the sandbox,
-> so frequent commits to the main repo and pushes to the remote is a good idea."
+The user articulated this clearly:
 
-The user's instinct is correct (local-only stores work, frequent fork-repo commits
-preserve config), but the mechanism is slightly different from what the comment
-sketches. Here's the actual model.
+> "For development on the sandbox the pack will be in a git repo that you create in
+> the sandbox. When I run it on my laptop they will all be github repositories. Same
+> with dolt. I want this set up so that when I'm running it on my laptop, if the
+> container is killed, I can just spin up another container, re-clone the github
+> repos, and start again. I thought that was the whole intent behind using dolt with
+> a git back-end. That's why I'm asking you to use the git back end for dolt, so that
+> it transfers easily to my laptop."
 
-### Dolt (the Beads backend)
-- **Dolt is NOT git.** It's a SQL database with git-*like* operations (init, commit,
-  branch, push). A dolt store lives in `.dolt/` (or under `.beads/` for our use).
-- **It runs purely local with no remote configured.** Gascity's default `managed_city`
-  mode launches a per-city dolt SQL server, port recorded in `.beads/dolt-server.port`,
-  no DoltHub or external server needed. (Source: lago-morph deep dive §6, citing
-  `internal/beads/contract/files.go`.)
-- **Multi-agent access is via SQL connections to that one server**, not worktrees.
-  All rigs share the same physical dolt server; isolation is by bead-ID prefix per
-  rig (e.g. `riga-h2t`, `rigb-gne`). The rig's `.beads/config.yaml` sets
-  `gc.endpoint_origin: inherited_city`.
-- **Therefore, no worktrees are involved on the beads/dolt side.** The "local repo,
-  no remote, multiple readers/writers" pattern the user wants is achieved by dolt's
-  SQL server + prefix scoping. Just install dolt + bd and let the default behavior
-  do this for us.
-- **Laptop transition is clean:** the user can keep using local-only dolt on their
-  laptop, OR add a remote (DoltHub, DoltLab, or self-hosted dolt remote) without
-  changing the pack — that's a city.toml / `.beads/config.yaml` concern.
+Translated:
 
-### Rigs (which ARE git repos)
-- **Rigs are plain git repos** added to the city via `gc rig add <path>`. They are
-  separate registered directories, not gascity-managed worktrees.
-- **Local-only (no remote) is fine for sandbox demonstration rigs.** Just
-  `git init` them, never `git remote add`. On the laptop the user can add a GitHub
-  remote without affecting pack design.
-- **Git worktrees are not a gascity SDK feature** — per the lago-morph deep dive §15,
-  worktrees are a pattern that *pack scripts* can use from `pre_start` hooks if a
-  pack wants to demonstrate parallel agent work on the same codebase. Don't introduce
-  worktrees in v1 of the pack; if a later demo calls for "two role agents working
-  different branches of the same rig in parallel," reach for `git worktree add` from
-  a pack script then.
-- **Concurrent multi-agent access to a single rig directory** (without worktrees) is
-  fine for sequential or coordinated work; problematic if two agents simultaneously
-  do `git checkout` to different branches. Pack design should match this: prefer
-  patterns where one agent owns the rig's working tree at a time, or use worktrees
-  when truly parallel.
+- **Sandbox loop:** agent creates local git repos for the pack, rigs, and bead store.
+  Agent commits frequently and pushes to GitHub remotes (the deliverable repo + one
+  GitHub repo per artifact, or all-in-one — see below).
+- **Laptop loop:** user clones those GitHub repos, runs `docker build && docker run`,
+  Gas City comes up using cloned state. If the container dies, user `docker rm`s it,
+  spins up a fresh one, re-clones if needed, and resumes.
+- **GitHub is the source of truth** for everything that must survive a container
+  death.
 
-### Two repos, two purposes — staging vs deliverable
+### What works as-the-user-imagines vs. what doesn't
 
-This was clarified by the user in PR #1 review ("don't talk about the repo. I will
-create a brand new repo for all of this. ... The new repo will have nothing to do
-with arazzo-engine"). There are two distinct repos in play:
+**Works straightforwardly:**
 
-- **Staging repo (`jonathanmanton/arazzo-engine-fork`, this one):** holds this handoff
-  doc and any working notes during this Claude session. Treat it as a scratchpad.
-  Do NOT design the pack to live here. When this session ends, the relevant artifact
-  from this repo is *just this doc*.
-- **Deliverable repo (to be created by the user, name TBD):** brand-new repo with no
-  arazzo-engine relationship. Will contain the Dockerfile, the pack, city.toml
-  template, rig templates, and a top-level README. The next agent (or a future you,
-  in a session pointing at the new repo) will build all of this there.
+| Artifact | Sandbox storage | Laptop storage | Survives `docker rm`? |
+|---|---|---|---|
+| Pack (`pack.toml`, prompts, formulas) | Local `git init` in sandbox | GitHub repo | Yes — re-clone from GitHub |
+| Rigs (each a git repo) | Local `git init` in sandbox | One GitHub repo per rig | Yes — re-clone from GitHub |
+| `city.toml` template | Lives next to the Dockerfile | Same | Yes — re-clone from GitHub |
+| Dockerfile, README | Lives in deliverable repo | Same | Yes — re-clone from GitHub |
 
-### What lives where (the durability strategy)
+**Does NOT work the way the user described — needs decision:**
 
-Inside the docker container (which itself runs inside the sandbox), there's a third
-location: runtime state. Putting it all together:
-
-| Location | Contents | Lifetime |
+| Artifact | The misconception | The reality |
 |---|---|---|
-| **Deliverable repo** (new, user-created) | Dockerfile, pack/, city.toml template, rig templates, README | Permanent — this is the deliverable |
-| **Staging repo** (arazzo-engine-fork) | This handoff doc; any in-session scratch notes | Until the deliverable repo exists, then archive/abandon |
-| **Docker container FS** (inside sandbox) | Running gascity install, dolt data, rig working trees, `.gc/` runtime state, `.beads/dolt-server.port` | Container lifetime — durable across `docker stop`/`docker start` if you mount a volume; gone on `docker rm` |
-| **Sandbox host FS** (outside container) | The cloned deliverable repo (for development), docker daemon state, scratch | Sandbox session lifetime — gone on container reclaim |
+| **Dolt bead store** | "dolt has a git back-end, pushes to github, re-clone like other repos" | Dolt is **not** git. Dolt has its **own** git-LIKE operations (`dolt init`, `dolt commit`, `dolt push`) and its **own** remote protocol. Dolt remotes are DoltHub, DoltLab, or self-hosted dolt servers — **NOT GitHub.** You cannot `git clone` a dolt store; you can `dolt clone` from a dolt remote. |
 
-**Frequent-commit rule** (per PR #1 review: *"frequent commits to the main repo and
-pushes to the remote is a good idea"*): any time a meaningful pack/config change
-lands and is validated, commit and push to the deliverable repo. Treat it as a
-journal of configuration state worth preserving — runtime state and re-derivable
-data stay out (gitignored or volume-mounted only).
+This is the **single most important thing to resolve with the user before building**.
+They asked for "dolt with a git back-end" — that's not a real thing. There are two
+genuine paths that satisfy the "container dies → re-clone → resume" goal:
 
-**Re-derivable vs not:** dolt bead data is *technically* re-derivable from orders in
-the pack + a fresh run, but in practice if you're mid-debug and the container dies,
-you lose investigation context. The user's point that "we don't even have to worry
-about the docker container failing, as we can restart everything by just bringing up
-a new one" depends on the bead store being durable — so mount the dolt data
-directory as a docker volume that survives `docker rm`. If snapshots-to-git become
-needed later (periodic `dolt dump`), add then; don't pre-build.
+**Path A (recommended): use Beads `file` provider, not `bd`/dolt.**
+- Beads has two providers: `bd` (uses dolt under the hood) and `file` (plain JSON
+  files in `.beads/`).
+- `file` mode produces ordinary files that ARE plain-git-trackable and can live in
+  a GitHub repo, satisfying the user's "re-clone from github" model exactly.
+- Trade-off: less performant, no SQL queries against bead history, no dolt-style
+  branching of bead state. For a learning-and-demonstration pack, these probably
+  don't matter.
+- Per lago-morph deep dive §6: `file` provider is recommended for "tutorials,
+  lightweight" use — which is exactly our case.
+
+**Path B: keep `bd`/dolt, and add a dolt remote (NOT github).**
+- Run a dolt remote alongside the city (e.g., on DoltHub free tier, or a
+  self-hosted `dolt sql-server --remotesapi-port`).
+- Container death → re-clone via `dolt clone <dolt-remote>` instead of
+  `git clone <github>`. Two source-of-truth systems instead of one.
+- Doesn't match the user's stated "all github" model — more moving parts on the
+  laptop side.
+
+**Recommendation to surface to the user:** Path A. Frame it as "we get exactly what
+you asked for — everything in github, re-clone on container death — by using the
+`file` Beads provider instead of dolt." Reserve dolt for a later "advanced" demo if
+they want to show off branching workflows. The user previously rejected `file` Beads,
+but that was before they articulated the GitHub-as-source-of-truth model; given that
+goal, `file` is the natural fit.
+
+### Rigs (plain git repos)
+- Each rig is a regular git repo added to the city via `gc rig add <path>`.
+- **On sandbox:** `git init` each rig locally; `git remote add origin
+  git@github.com:<user>/<rig-name>.git`; push frequently.
+- **On laptop:** user `git clone`s each rig repo into a directory the container will
+  mount or copy in.
+- **Git worktrees are NOT a gascity SDK feature** (lago-morph deep dive §15). Don't
+  introduce them in v1 of the pack; if a later demo wants two agents on different
+  branches of the same rig simultaneously, *pack scripts* can call `git worktree add`
+  from a `pre_start` hook. Defer until needed.
+
+### Layout sketch (one possible structure for the deliverable repo)
+
+```
+<deliverable-repo>/                   ← user-created github repo, ubuntu-base Dockerfile
+├── Dockerfile                        ← image build
+├── docker-compose.yml                ← brings the container up (recommended; user OK'd)
+├── README.md                         ← single source of laptop bring-up instructions
+├── pack/                             ← the portable pack (agents, formulas, prompts)
+│   ├── pack.toml
+│   ├── prompts/
+│   └── formulas/
+├── city.toml.example                 ← deployment-specific template
+├── reference-only/                   ← supporting docs (NOT consumed by gascity)
+│   └── lago-morph-13-gas-city-deep-dive.md
+├── gascity-sandbox.md                ← this handoff doc (delete after first read if desired)
+└── rigs/                             ← rig templates OR pointers to separate rig repos
+    └── ...
+```
+
+Whether rigs are subdirs of this repo or separate sibling repos is a structural call
+worth surfacing to the user. Separate repos match their "all github repositories"
+phrasing better; subdirs of one repo is simpler to demo. Recommend separate repos —
+it forces you to design the city.toml around rig URLs (the GitHub-flip portability
+property in §1).
+
+### Sandbox-side scratch dir vs deliverable repo
+
+While developing on the sandbox, the agent will inevitably create scratch files,
+clone gascity upstream, build go binaries, etc. **These don't belong in the
+deliverable repo.** Use a separate sandbox scratch path (e.g., `/workspace/scratch/`)
+that's gitignored or simply outside the deliverable repo's tree. The only things
+that get committed to the deliverable repo are the artifacts in the layout above.
 
 ---
 
@@ -492,29 +526,31 @@ These are not optional things to "design around later." They are sandbox propert
 shape every decision.
 
 ### 4.1 The sandbox is ephemeral
-Container is reclaimed on idle or session end. **Anything that needs to survive must be
-committed and pushed to `jonathanmanton/arazzo-engine-fork` on branch
-`claude/sandbox-independent-sessions-gScht`.** That includes:
-- The `city.toml` and any city-local state.
-- Any rig directories the user wants persisted.
-- Notes, scratch files, this very document.
+Container is reclaimed on idle or session end. **Anything that needs to survive must
+be pushed to a GitHub remote** — the deliverable repo for the pack/Dockerfile/etc.,
+and (per §1b) separate GitHub repos for each rig if you go with the separate-rig-repos
+layout. That includes:
+- The Dockerfile, pack, `city.toml` template, README.
+- Each rig's source tree (committed in its own GitHub repo).
+- Bead store (if you go with Path A `file` Beads — committed in either the
+  deliverable repo or its own repo).
+- Notes, scratch files, this very document — committed in the deliverable repo.
 
-Things that *don't* need to survive (and shouldn't be committed):
-- The Go 1.25 install — re-downloadable.
-- The cloned `gascity` repo and its `gc` binary — re-buildable.
-- The tmux sockets and `~/.cache` artifacts.
+Things that *don't* need to survive and shouldn't be committed:
+- The Go install (re-downloadable; lives inside the container's image layers anyway).
+- The `gascity` source clone (re-buildable; image build clones during `docker build`).
+- `tmux` sockets, `~/.cache`, runtime `.gc/`, dolt server port files.
 
-**Strong recommendation:** put the city *inside* the fork repo, e.g.
-`/home/user/arazzo-engine-fork/gascity-sandbox/city/`, so `git add` survives container
-churn. Don't put it at `~/bright-lights` (the README's example path) because that's
-outside the repo and will vanish.
+**Practical rhythm:** every time a pack/config/Dockerfile change reaches a working
+state, commit and push. Treat git history as your durability log. The sandbox can
+vanish at any time; nothing in the container or on the sandbox host survives.
 
-### 4.2 You are MCP-scoped to ONE repo
-Your GitHub MCP tools only work against `jonathanmanton/arazzo-engine-fork`. You cannot
-create a separate "city" repo. Either:
-- Host the city as a subdir of this fork (recommended; simplest), or
-- Initialize a local-only git repo for the city and just accept it dies with the
-  container (only OK for throwaway demos).
+### 4.2 GitHub MCP scope
+Your GitHub MCP tools may be scoped to one repo at a time by the sandbox's session
+configuration. Check the system reminders you got at startup to confirm which repo
+you have write access to (it should be the user's deliverable repo). If you find
+yourself blocked from a repo you need access to, surface that to the user before
+trying workarounds.
 
 ### 4.3 Auth for spawned `claude` subprocesses — RESOLVED, it works
 **Originally flagged as the single most likely blocker. Verified working 2026-05-24
@@ -668,28 +704,24 @@ them or prefix the command. Consider writing a tiny `gascity-sandbox/env.sh` to
 **Why:** Homebrew path is macOS-only. Source build is the only option here.
 
 ```bash
-mkdir -p /home/user/arazzo-engine-fork/gascity-sandbox
-cd /home/user/arazzo-engine-fork/gascity-sandbox
+mkdir -p /workspace/scratch
+cd /workspace/scratch
 git clone https://github.com/gastownhall/gascity.git
 cd gascity
 make install
 which gc && gc version
 ```
 If `make install` writes outside `$GOBIN`, find where it landed and add that to PATH.
-Add `gascity-sandbox/gascity/` to a top-level `.gitignore` entry (or place the clone
-outside the fork) — we do not want to commit a clone of someone else's repo into ours.
+The cloned `gascity` source does not belong in the deliverable repo — keep it in the
+sandbox scratch area or do the clone inside the Dockerfile so it lives in image
+layers only.
 
-**Decision to surface to the user before doing this:** should the gascity clone live
-inside the fork (and be gitignored) or in `/tmp` (and be re-cloned on every container
-rebuild)? Recommend gitignored-inside-fork: re-clones are cheap but a stable path is
-nicer to refer to.
-
-### Step 5 — Initialize the city inside the fork (5 min)
-**Why:** §4.1 — anything outside the fork dies with the container.
+### Step 5 — Initialize the city (5 min)
+**Why:** every step from here on assumes a working `gc` binary and a city directory.
 
 ```bash
-mkdir -p /home/user/arazzo-engine-fork/gascity-sandbox/cities
-cd /home/user/arazzo-engine-fork/gascity-sandbox/cities
+mkdir -p /workspace/scratch/cities
+cd /workspace/scratch/cities
 GC_BEADS=file gc init bright-lights
 cd bright-lights
 # inspect what got created — read city.toml end-to-end and summarize it for the user
@@ -698,7 +730,7 @@ cat city.toml
 Things to look for in `city.toml` and report to the user:
 - The configured agent provider (must be `claude` for us).
 - Concurrency / budget settings.
-- The Beads provider (must be `file`).
+- The Beads provider (set per §1b decision — `file` if Path A, `bd` if Path B).
 - Any references to absolute paths — those are container-fragile.
 
 ### Step 6 — Start the controller, but do NOT attach yet (5 min)
@@ -719,8 +751,8 @@ Report findings to the user before issuing any `bd create`.
 up without committing to anything real.
 
 ```bash
-mkdir -p /home/user/arazzo-engine-fork/gascity-sandbox/rigs/hello
-cd /home/user/arazzo-engine-fork/gascity-sandbox/rigs/hello
+mkdir -p /workspace/scratch/rigs/hello
+cd /workspace/scratch/rigs/hello
 git init -q
 git commit --allow-empty -m "init rig"
 GC_BEADS=file gc rig add .
@@ -759,12 +791,11 @@ chat message listing:
 Get user buy-in on that plan before writing 500 lines of TOML. Then build it iteratively,
 validating each piece in the sandbox before moving on.
 
-#### 8c. The pack lives in the fork repo
-Specifically, recommend `/home/user/arazzo-engine-fork/gascity-sandbox/pack/` for the
-pack itself, separate from `cities/bright-lights/` (which is the local
-deployment-specific `city.toml`). The pack gets committed and pushed; the city.toml
-gets committed *as a reference example* with comments showing what to change for a
-laptop install; the `.gc/` runtime state is gitignored.
+#### 8c. The pack lives in the deliverable repo
+The pack (`pack.toml` + prompts + formulas) belongs at the top level of the
+deliverable repo (see the layout sketch in §1b). The `city.toml.example` lives
+alongside it. Runtime state (`.gc/`, `.beads/dolt-server.port`, tmux sockets)
+stays inside the container and is gitignored if it leaks out.
 
 ---
 
@@ -775,11 +806,10 @@ implementation choices are now yours to make and report on, not yours to ask. **
 to deciding and informing; only escalate when the choice is product-shaped.**
 
 ### Decide yourself (just report what you did)
-- **Where gascity actually runs.** Inside a docker container (ubuntu base) — the user
-  committed to this in PR #1 review. Inside the container, the install path is your
-  choice (`/opt/gascity-sandbox/` or `/workspace/` is fine). The deliverable repo
-  (which the user will clone on their laptop and build the image from) holds the
-  Dockerfile and pack.
+- **Where gascity actually runs.** Inside a docker container (ubuntu base) — see §0
+  and §1b. Inside the container, the install path is your choice (`/opt/gascity/` or
+  `/workspace/` is fine). The deliverable repo (which the user clones on their laptop
+  and builds the image from) holds the Dockerfile and pack.
 - **Agent provider.** `claude`, because it's installed and auth works. Don't even bring
   up codex/gemini unless the user does.
 - **Beads provider.** `bd` (dolt-backed) — user explicitly wants dolt. Inside the
@@ -870,15 +900,15 @@ export GOBIN="/home/user/go/bin"
 mkdir -p "$GOBIN"
 
 # Step 4
-mkdir -p /home/user/arazzo-engine-fork/gascity-sandbox
-cd /home/user/arazzo-engine-fork/gascity-sandbox
+mkdir -p /workspace/scratch
+cd /workspace/scratch
 git clone https://github.com/gastownhall/gascity.git
 (cd gascity && make install)
-echo "gascity-sandbox/gascity/" >> /home/user/arazzo-engine-fork/.gitignore
+echo "gascity-sandbox/gascity/" >> /workspace/scratch/.gitignore
 
 # Step 5
-mkdir -p /home/user/arazzo-engine-fork/gascity-sandbox/cities
-cd /home/user/arazzo-engine-fork/gascity-sandbox/cities
+mkdir -p /workspace/scratch/cities
+cd /workspace/scratch/cities
 GC_BEADS=file gc init bright-lights
 ```
 
