@@ -17,6 +17,12 @@ Single source of truth for what's actually been done. **Update this every time y
 progress** so the next agent (or a future you, after compaction) doesn't have to
 reverse-engineer state from git history.
 
+- **2026-05-24** — Fixed an ambiguity in §1 "operating model" diagram (PR #1 review
+  comment): the previous diagram made it look like the main agent and gascity were on
+  separate hosts. They are not — main agent, gascity controller, and all role agents
+  are co-located inside the same sandbox VM, sharing one filesystem and one process
+  table. Also clarified in §4.5 that multiple role agents running concurrently is the
+  *point* of gascity and is not what cost discipline restricts.
 - **2026-05-24** — **Intent clarified by the user (major change).** The user will NOT
   operate the city. They will not open a shell, attach a tmux session, or run
   `bd create`. The agent runs everything. The actual deliverable is a *good city
@@ -71,23 +77,67 @@ the agent is the operator.)
 
 ### The operating model
 
+Everything below the user's chat box lives inside **one Linux VM** — the sandbox.
+That includes the main agent (you), the gascity controller, and every role agent the
+controller spawns. They share a filesystem and a process table. The user is outside
+the VM and only ever talks to you via chat.
+
 ```
-┌────────────────┐  high-level requests  ┌──────────────┐   runs everything   ┌─────────────┐
-│      USER      │ ────────────────────▶ │    AGENT     │ ──────────────────▶ │  GAS CITY   │
-│ (this is jonathan@) │                     │ (you)        │                     │  (in sandbox) │
-│ Never touches  │ ◀──────────────────── │ Reports back │ ◀────────────────── │             │
-│ shell or tmux  │  observations,        │ Holds context│   logs, beads,      │             │
-└────────────────┘  recommendations,     └──────────────┘   pane captures     └─────────────┘
-                    questions
+┌────────────┐         ┌─────────────────────────────────────────────────────────────┐
+│   USER     │         │                  SANDBOX VM (one Linux box)                 │
+│ jonathan@  │◀──chat──┤                                                             │
+│ Only       │ (the    │   ┌──────────────────┐                                      │
+│ interface  │  only   │   │  MAIN AGENT      │── runs `gc`, `bd`, tmux, git ──┐    │
+│ is chat    │  link)  │   │  (you, Claude    │                                │    │
+│            │         │   │   Code session,  │                                │    │
+│            │         │   │   itself a       │                                │    │
+│            │         │   │   `claude` proc) │                                │    │
+│            │         │   └─────────┬────────┘                                │    │
+│            │         │             │ launches & observes                    │    │
+│            │         │             ▼                                        │    │
+│            │         │   ┌──────────────────┐                               │    │
+│            │         │   │  GAS CITY        │  controller / beads / events  │    │
+│            │         │   │  (gc start)      │                               │    │
+│            │         │   └─────────┬────────┘                               │    │
+│            │         │             │ spawns tmux-runtime panes              │    │
+│            │         │             ▼                                        │    │
+│            │         │   ┌──────────────────────────────────────────────┐  │    │
+│            │         │   │  ROLE AGENTS — multiple concurrent `claude`  │  │    │
+│            │         │   │  processes, one per role per pool slot.      │  │    │
+│            │         │   │  e.g. mayor (supervisor) + whatever roles    │  │    │
+│            │         │   │  your pack defines (deacon, polecat, etc.).  │  │    │
+│            │         │   │  All sharing the same FS as you.             │  │    │
+│            │         │   └──────────────────────────────────────────────┘  │    │
+│            │         │             ▲                                        │    │
+│            │         │             └────────────────────────────────────────┘    │
+│            │         │             (you can `ps`, `tmux ls`, read .gc/, etc.)    │
+└────────────┘         └─────────────────────────────────────────────────────────────┘
 ```
 
+Key things this diagram is asserting (which the previous version got wrong):
+
+- **Main agent and role agents are co-located on one VM.** You can `ps -ef` and see
+  yourself, the gascity controller, and every role agent in the same process table.
+  You can read every file they touch. You are not in a different host from them.
+- **Multiple role agents run concurrently — that is the entire point of gascity.**
+  A pack typically defines several roles (mayor + others). Each role runs as its own
+  `claude` subprocess, often in its own tmux pane, in parallel. Don't try to serialize
+  them; that defeats the purpose. (See lago-morph §2 and §5 for the runtime model.)
+- **You are also a `claude` process.** So when you launch role agents via `gc`, the
+  resulting `ps` will show your own claude process *plus* one per role. Pool sizes
+  multiply that.
+- **The user only sees chat.** They do not see `ps`, they do not see tmux, they do
+  not see file paths unless you put one in a chat message. Their only sensor on the
+  whole VM is your text replies.
+
+What the user does and doesn't do:
 - The user **never** runs `gc`, `bd`, `tmux`, or any sandbox shell command.
 - The user does not attach to the mayor or any other session.
 - The user does not need to know the city is in `/home/user/arazzo-engine-fork/...` or
-  that `gc start` is running in background tmux session `foo`. Those are agent-internal
-  implementation details.
-- All operational state, all debug info, all "is it working" judgments come from the
-  agent, in chat, in plain language.
+  that `gc start` is running in background tmux session `foo`. Those are your
+  implementation details to manage and summarize.
+- All operational state, all debug info, all "is it working" judgments come from you,
+  in chat, in plain language.
 
 ### The deliverable (this is the actual goal)
 
@@ -363,19 +413,31 @@ Per the updated §1 intent, the user is not in the loop on individual commands. 
 means **you** own preventing runaway agent fan-out. There is no "ask the user before
 each `bd create`" safety net.
 
+**Important distinction:** "multiple agents at once" is the *point* of gascity. A pack
+typically defines several distinct roles (mayor + others) that run concurrently — do
+not interpret cost discipline as "only one agent allowed." What we cap is duplicates
+within a role pool and queue depth of in-flight work, not the number of distinct
+roles.
+
 Concrete rules:
-- Default the pack to **1** concurrent agent per rig, **1** in-flight order at a time.
-- Set explicit time bounds on convergence loops (`max_iterations`, cooldown periods —
-  check the lago-morph deep dive §7 for the actual config keys).
-- Before issuing any order that triggers an `exec` block calling `claude`, mentally
-  estimate: "if this loops 10x, what's the cost?" If the answer is more than a few
-  dollars, pause and surface a plan to the user *before* dispatching.
-- Watch for the `.gc/events.jsonl` unbounded-growth gotcha (lago-morph "Critical
-  Gotchas") — if you're running a lot of iterations, periodically check disk and
-  rotate if needed.
-- If you hit a situation where the controller is spawning more agents than expected,
-  `gc stop` (or kill the controller process) first, diagnose second. Don't let it run
-  while you investigate.
+- **Distinct roles:** as many as the pack design calls for. Adding a role is a design
+  decision, not a cost decision.
+- **Pool size per role:** default to **1 worker per role** during demo/dev. The
+  controller will still spin up one process per role, so a pack with mayor + 3 other
+  roles = 4 concurrent `claude` processes plus you. That's expected.
+- **In-flight orders:** default to **1 at a time** until you have a specific
+  demonstration reason to allow more (e.g. showing a fanout pattern).
+- **Convergence loop bounds:** set explicit `max_iterations` and cooldown periods —
+  check lago-morph §7 for the actual config keys.
+- **Pre-dispatch cost estimate:** before issuing any order that triggers an `exec`
+  block calling `claude`, mentally estimate: "if this loops 10x across N roles, what's
+  the cost?" If the answer is more than a few dollars, pause and surface a plan to
+  the user before dispatching.
+- **Disk hygiene:** watch the `.gc/events.jsonl` unbounded-growth gotcha (lago-morph
+  "Critical Gotchas") — periodically check disk and rotate if needed.
+- **Emergency stop:** if the controller is spawning more processes than expected,
+  `gc stop` (or kill the controller process) first, diagnose second. Don't let it
+  run while you investigate.
 
 ---
 
