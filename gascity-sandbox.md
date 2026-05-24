@@ -6,13 +6,6 @@ file is the only context you get. Read it end-to-end before touching anything.
 **Author:** a previous Claude Code agent, 2026-05-24.
 **User:** the human you're talking to — they'll introduce themselves.
 
-**Important — this doc is self-contained.** It was originally drafted in a different
-sandbox/repo entirely; that origin is irrelevant and intentionally not referenced
-anywhere. By the time you are reading this, the file lives in the user's actual
-**deliverable repo** (a brand-new repo the user created specifically for this work),
-and that is the only repo you need to think about. There is no upstream relationship,
-no "parent" repo, no other staging area. Treat the deliverable repo as the universe.
-
 ---
 
 ## 0. Progress log (most recent first)
