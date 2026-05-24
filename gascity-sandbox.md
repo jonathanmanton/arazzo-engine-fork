@@ -5,9 +5,14 @@ file is the only context you get. Read it end-to-end before touching anything.
 
 **Author of this doc:** previous agent in session, 2026-05-24.
 **User:** jonathan@manton.com.
-**Working repo:** `jonathanmanton/arazzo-engine-fork` (you are MCP-scoped to this one repo
-only — see the system reminder you got at startup).
-**Branch to develop on:** `claude/sandbox-independent-sessions-gScht`.
+**Staging repo (where this doc lives temporarily):** `jonathanmanton/arazzo-engine-fork`,
+branch `claude/sandbox-independent-sessions-gScht`. You are MCP-scoped to this repo
+only for the current session.
+**Deliverable repo:** *to be created by the user* as a brand-new repo with nothing to
+do with arazzo-engine. This handoff doc is what bridges the two — the user will read
+it, create the new repo, and start a fresh agent session there. Treat
+arazzo-engine-fork as a scratchpad for this doc only; do not assume the pack, city,
+or any deliverable artifacts will live here long-term.
 
 ---
 
@@ -17,20 +22,27 @@ Single source of truth for what's actually been done. **Update this every time y
 progress** so the next agent (or a future you, after compaction) doesn't have to
 reverse-engineer state from git history.
 
+- **2026-05-24** — **Deliverable repo is a brand-new user-created repo, NOT
+  arazzo-engine-fork.** PR #1 review: *"Don't talk about the repo. I will create a
+  brand new repo for all of this. ... The new repo will have nothing to do with
+  arazzo-engine."* This handoff doc is the bridge — the user will read it, create
+  the new repo, and start a fresh agent session there. Updated masthead, §1
+  deliverable, and added a new §1b two-repos section to clarify staging
+  (arazzo-engine-fork, scratchpad) vs deliverable (new repo, the real artifact).
+- **2026-05-24** — **Docker-first install decided (user committed).** PR #1 review:
+  *"run everything in a docker container inside the sandbox ... use an ubuntu base
+  ... I just take the Dockerfile that is produced as part of this effort, change
+  some parameters to point to real github repos instead of local ones, and off we
+  go."* Docker daemon confirmed working in the sandbox (root access, dockerd
+  available, `docker info` healthy). The Dockerfile is now part of the deliverable.
+  Inside the container: dolt local-only, rigs as local git repos, structured so
+  flipping to GitHub remotes is a config change not a code change. **§3 inventory
+  and §5 setup plan still need a substantial rewrite for docker-first** — flagged.
 - **2026-05-24** — **Beads provider flipped from `file` to `bd` (dolt-backed).** PR #1
-  review: user wants dolt on their laptop, so the sandbox should match. Dolt runs
-  purely local via `managed_city` mode — no remote required. Updated §1a rule #4
-  and added a new §1b explaining the local-only persistence model: dolt for beads
-  (SQL server + prefix scoping, not worktrees), plain `git init` for rigs, frequent
-  fork-repo commits for config state, runtime state gitignored. **§3 inventory and §5
-  setup plan still need updating** to add the dolt + bd install step — deferred
-  pending the docker-container decision (see below).
-- **2026-05-24** — **Pending decision: dockerize the whole install (user's proposal).**
-  User suggested in PR #1 review running everything inside a docker container
-  (ubuntu base) inside the sandbox, so the Dockerfile becomes the laptop
-  deliverable. Explicitly tagged "don't implement without discussing." Response on
-  PR thread is in progress; defer §3/§5 updates until this is settled because they
-  shift substantially under a docker model.
+  review: user wants dolt on their laptop. Dolt runs purely local via `managed_city`
+  mode — no remote required. Updated §1a rule #4 and added a new §1b explaining the
+  local-only persistence model: dolt for beads (SQL server + prefix scoping, not
+  worktrees), plain `git init` for rigs.
 - **2026-05-24** — Fixed an ambiguity in §1 "operating model" diagram (PR #1 review
   comment): the previous diagram made it look like the main agent and gascity were on
   separate hosts. They are not — main agent, gascity controller, and all role agents
@@ -155,23 +167,35 @@ What the user does and doesn't do:
 
 ### The deliverable (this is the actual goal)
 
-The artifact you are producing is **a Gas City configuration that is portable to the
-user's laptop**. Concretely, by the time this work is "done," there should be:
+The artifact you are producing is **a Dockerfile + Gas City configuration that the
+user can `docker run` on their laptop** and have Gas City just work. Concretely, by
+the time this work is "done," the user's brand-new deliverable repo should contain:
 
-- A **pack** (the laptop-portable part) committed to the fork repo — see §1a for what
-  this means and §2 for the three-file separation pattern lago-morph documents.
+- A **Dockerfile** (ubuntu base — user's preference) that installs Go, gascity, dolt,
+  bd, tmux, claude CLI, and any other tooling, then copies in the pack and brings up
+  the controller. This is the "no OS-specific hurdles" path — sidesteps Homebrew vs
+  apt, Mac vs Linux, etc.
+- A **pack** (the portable part) sitting alongside the Dockerfile in the new repo —
+  see §1a for what this means and §2 for the three-file separation pattern lago-morph
+  documents.
 - A `city.toml` that demonstrates the configuration meaningfully, with comments that
   explain *why* each section is there.
 - One or more demonstration **rigs** (or rig templates) that exercise interesting
   multi-agent behavior.
-- A short **README inside the pack directory** telling the user what to install on
-  their laptop (Homebrew commands, `gc` build steps, etc.) and what one command to
-  run to bring the city up locally. This README is the only thing the user reads
-  before trying to use the deliverable.
+- A short **README in the new repo root** telling the user the single
+  `docker build` / `docker run` command (or `docker-compose up`) to bring the city
+  up locally, plus where to set `ANTHROPIC_API_KEY` for the container. The
+  Dockerfile + README is the only surface the user touches.
 - Whatever the user runs on their laptop after following that README should work
-  without them having to debug the *gascity configuration* itself. OS-level issues
-  (Homebrew vs apt, path differences, tool versions) are acceptable; config bugs are
-  not.
+  without them having to debug the *gascity configuration* itself. Docker-level
+  issues (host docker setup, volume mounts, API key wiring) are acceptable; config
+  bugs are not.
+
+**The "easy to switch to github remotes later" requirement** (per PR #1 review):
+inside the container, dolt uses a local repo and rigs use local `git init` repos with
+no remotes. The pack and city.toml should be structured so that *flipping to GitHub
+remotes is a config change*, not a code change — e.g. rig URLs in city.toml expressed
+as variables that default to local paths but accept `git@github.com:...` overrides.
 
 ### Interpreted objectives (in priority order)
 
@@ -314,26 +338,46 @@ sketches. Here's the actual model.
   patterns where one agent owns the rig's working tree at a time, or use worktrees
   when truly parallel.
 
-### What gets committed to the fork repo (the durability strategy)
-The sandbox is ephemeral, so anything you want to survive container reclaim must live
-in `arazzo-engine-fork` (this repo, branch `claude/sandbox-independent-sessions-gScht`).
+### Two repos, two purposes — staging vs deliverable
 
-| Lives in fork repo (committed) | Lives in sandbox only (gitignored or transient) |
-|---|---|
-| `gascity-sandbox/pack/**` — the deliverable | `gascity-sandbox/gascity/` — upstream clone |
-| `gascity-sandbox/cities/bright-lights/city.toml` — reference deployment | `gascity-sandbox/cities/bright-lights/.gc/` — runtime state |
-| `gascity-sandbox/rigs/*/` source files (committed snapshots) | `.beads/dolt-server.port`, tmux sockets, log files |
-| This handoff doc, READMEs | `.beads/dolt/` — dolt SQL data (can be re-derived) |
+This was clarified by the user in PR #1 review ("don't talk about the repo. I will
+create a brand new repo for all of this. ... The new repo will have nothing to do
+with arazzo-engine"). There are two distinct repos in play:
 
-**Frequent-commit rule:** any time a meaningful pack/config change lands and is
-validated, commit and push. Treat the fork repo as a journal of "configuration state
-worth preserving" — runtime state and re-derivable data stay out.
+- **Staging repo (`jonathanmanton/arazzo-engine-fork`, this one):** holds this handoff
+  doc and any working notes during this Claude session. Treat it as a scratchpad.
+  Do NOT design the pack to live here. When this session ends, the relevant artifact
+  from this repo is *just this doc*.
+- **Deliverable repo (to be created by the user, name TBD):** brand-new repo with no
+  arazzo-engine relationship. Will contain the Dockerfile, the pack, city.toml
+  template, rig templates, and a top-level README. The next agent (or a future you,
+  in a session pointing at the new repo) will build all of this there.
+
+### What lives where (the durability strategy)
+
+Inside the docker container (which itself runs inside the sandbox), there's a third
+location: runtime state. Putting it all together:
+
+| Location | Contents | Lifetime |
+|---|---|---|
+| **Deliverable repo** (new, user-created) | Dockerfile, pack/, city.toml template, rig templates, README | Permanent — this is the deliverable |
+| **Staging repo** (arazzo-engine-fork) | This handoff doc; any in-session scratch notes | Until the deliverable repo exists, then archive/abandon |
+| **Docker container FS** (inside sandbox) | Running gascity install, dolt data, rig working trees, `.gc/` runtime state, `.beads/dolt-server.port` | Container lifetime — durable across `docker stop`/`docker start` if you mount a volume; gone on `docker rm` |
+| **Sandbox host FS** (outside container) | The cloned deliverable repo (for development), docker daemon state, scratch | Sandbox session lifetime — gone on container reclaim |
+
+**Frequent-commit rule** (per PR #1 review: *"frequent commits to the main repo and
+pushes to the remote is a good idea"*): any time a meaningful pack/config change
+lands and is validated, commit and push to the deliverable repo. Treat it as a
+journal of configuration state worth preserving — runtime state and re-derivable
+data stay out (gitignored or volume-mounted only).
 
 **Re-derivable vs not:** dolt bead data is *technically* re-derivable from orders in
 the pack + a fresh run, but in practice if you're mid-debug and the container dies,
-you lose your investigation context. If that becomes painful, we can revisit (e.g.
-periodic `dolt dump` of the bead DB to a SQL file committed under
-`gascity-sandbox/snapshots/`). Don't pre-build that until it bites.
+you lose investigation context. The user's point that "we don't even have to worry
+about the docker container failing, as we can restart everything by just bringing up
+a new one" depends on the bead store being durable — so mount the dolt data
+directory as a docker volume that survives `docker rm`. If snapshots-to-git become
+needed later (periodic `dolt dump`), add then; don't pre-build.
 
 ---
 
@@ -394,6 +438,14 @@ Prereqs per the README (status in *our* sandbox in the next section):
 ---
 
 ## 3. Sandbox inventory (verified 2026-05-24)
+
+> **STALE NOTE:** This inventory was captured for a direct-install model. Under the
+> now-decided docker-first approach (see §0 and §1b), most of these tools only need
+> to exist *inside the container* — the sandbox itself only needs docker + git +
+> claude. **Sandbox-side requirements:** docker (✅ available, dockerd started this
+> session — Ubuntu 24.04, root access), git, claude. **Container-side requirements:**
+> everything else (Go 1.25, tmux, jq, pgrep, lsof, flock, dolt, bd, gascity build).
+> The next agent should rewrite this section for the docker-first plan.
 
 Run these yourself before trusting any of this — the container is ephemeral, so by the
 time you read this it may have been rebuilt.
@@ -537,6 +589,20 @@ Concrete rules:
 ---
 
 ## 5. Proposed setup plan — with rationale
+
+> **STALE NOTE:** This plan describes a direct sandbox install. Under the now-decided
+> docker-first approach (see §0 and §1b), the plan should be rewritten as:
+> (1) verify network + auth on the sandbox host, (2) clone the user's new deliverable
+> repo, (3) write a Dockerfile that installs Go 1.25, gascity, dolt, bd, tmux, claude
+> (with auth wiring TBD — `ANTHROPIC_API_KEY` on laptop, but inside the sandbox the
+> proxy works via `ANTHROPIC_BASE_URL`; need to plumb that into the container build),
+> (4) `docker build`, (5) `docker run` with volume mounts for dolt data and the pack,
+> (6) `docker exec` to drive `gc init` / `gc start` / `gc rig add` from inside the
+> container. The next agent should rewrite this section before executing.
+>
+> The direct-install steps below are kept as reference for what each gascity
+> bring-up step looks like — the *operations* are the same, just done inside a
+> container.
 
 Do these in order. Each step has a *why* so you can deviate intelligently if reality
 disagrees.
@@ -709,20 +775,25 @@ implementation choices are now yours to make and report on, not yours to ask. **
 to deciding and informing; only escalate when the choice is product-shaped.**
 
 ### Decide yourself (just report what you did)
-- **Where the sandbox install lives.** Use `/home/user/arazzo-engine-fork/gascity-sandbox/`.
-  Subdirs: `gascity/` (source clone, gitignored), `cities/bright-lights/` (local city),
-  `rigs/...` (smoke-test rigs), `pack/` (the deliverable). Mention this layout to the
-  user once; don't re-ask.
+- **Where gascity actually runs.** Inside a docker container (ubuntu base) — the user
+  committed to this in PR #1 review. Inside the container, the install path is your
+  choice (`/opt/gascity-sandbox/` or `/workspace/` is fine). The deliverable repo
+  (which the user will clone on their laptop and build the image from) holds the
+  Dockerfile and pack.
 - **Agent provider.** `claude`, because it's installed and auth works. Don't even bring
   up codex/gemini unless the user does.
-- **Beads provider.** `file` for the pack default; `bd`/dolt only if you find a concrete
-  demonstration need (and even then, document it as an "advanced" variant).
-- **Concurrency cap.** 1 per rig, 1 in-flight order at a time, until you have a
-  specific reason to raise it (in which case tell the user why before doing it).
-- **Source clone location for `gascity`.** Inside the fork, gitignored.
-- **Smoke-test rig content.** Throwaway "hello world." Don't ask.
-- **What gets committed.** Pack, city.toml (as reference), gitignore. Not: cloned
-  upstreams, `.gc/` runtime state, tmux sockets, log files over a few KB.
+- **Beads provider.** `bd` (dolt-backed) — user explicitly wants dolt. Inside the
+  container, dolt uses a local repo with no remote. Structure city.toml so the rig
+  URLs can be swapped to GitHub remotes by config change later.
+- **Concurrency cap.** 1 worker per role pool, 1 in-flight order at a time, until you
+  have a specific reason to raise it. (Multiple distinct *roles* is expected and good
+  — see §4.5.)
+- **Source clone location for `gascity`.** Inside the container image at build time;
+  the upstream clone shouldn't end up in the deliverable repo.
+- **Smoke-test rig content.** Throwaway "hello world" — done inside the container.
+- **What gets committed to the deliverable repo.** Dockerfile, pack/, city.toml
+  template, rig templates, README. Not: cloned upstreams, runtime `.gc/` or
+  `.beads/dolt/` data, tmux sockets, log files.
 
 ### Ask the user (these are product-shaped)
 - **What the pack should demonstrate.** Multi-agent coordination on what kind of task?
