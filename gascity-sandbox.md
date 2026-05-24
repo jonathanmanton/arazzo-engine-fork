@@ -11,6 +11,29 @@ only — see the system reminder you got at startup).
 
 ---
 
+## 0. Progress log (most recent first)
+
+Single source of truth for what's actually been done. **Update this every time you make
+progress** so the next agent (or a future you, after compaction) doesn't have to
+reverse-engineer state from git history.
+
+- **2026-05-24** — Spawned-claude-via-tmux auth verified working (see §4.3). The
+  `ANTHROPIC_BASE_URL` proxy authenticates subprocesses transparently — no API key
+  needed. This had been flagged as the single most likely blocker; it isn't.
+- **2026-05-24** — Sandbox inventory captured (§3). Go 1.25 missing, `gc` not built,
+  everything else needed for file-backed Beads is present.
+- **2026-05-24** — Handoff doc created and pushed as PR #1 (draft). No CI configured
+  for this repo so nothing to babysit there.
+
+**Not yet done** (i.e. Step 1 onward in §5 is all still pending):
+- Outbound network confirmation (`curl` go.dev and github.com).
+- Go 1.25 install to `$HOME`.
+- `gc` build from source.
+- City init, controller start, rig add.
+- Decision on where the city lives (§6 Open Decision #1) — user has not answered.
+
+---
+
 ## 1. What the user actually wants
 
 Direct quotes from the conversation so you have the tone right:
@@ -126,7 +149,7 @@ lsof 4.95.0             /usr/bin/lsof
 flock (util-linux)      /usr/bin/flock
 make                    /usr/bin/make
 go 1.24.7               /usr/local/go/bin/go          ← TOO OLD, gascity wants 1.25+
-claude CLI v2.1.150     /opt/node22/bin/claude
+claude CLI v2.1.150     /opt/node22/bin/claude   ← auth verified for subprocesses, see §4.3
 node, npm, pnpm, npx    /opt/node22/bin/
 ```
 
@@ -364,7 +387,7 @@ At this point your job is to summarize:
 - Where the city lives, where the rig lives, what `gc start` is doing.
 - How to read the mayor's pane (`tmux capture-pane -t mayor -p`).
 - What budgets/limits are in place.
-- The auth result from Step 2.
+- The Step 2 auth recheck result (expected: still working — was verified 2026-05-24).
 - What to commit to the branch before the container idles out.
 
 Then **wait for instructions**. Do not start issuing orders on your own.
@@ -378,8 +401,10 @@ Ask about these the moment you're ready to start — don't guess.
 1. **Where should the city live?** Recommended: inside the fork at
    `gascity-sandbox/cities/bright-lights/`. Alternative: throwaway location outside
    the repo, accepting that it dies with the container.
-2. **Which agent provider for the rigs?** Only `claude` is installed; if Step 2 auth
-   check fails, this becomes a forced conversation.
+2. **Which agent provider for the rigs?** Only `claude` is installed and it has
+   working auth via the host proxy (see §4.3). codex/gemini would require both an
+   install and a separate auth story — default to `claude` unless the user pushes
+   otherwise.
 3. **Concurrency cap.** Default to 1. Confirm before raising.
 4. **What real work do they want to try first?** "hello world" is the README example;
    the user may have something more concrete in mind given they mentioned "configuring a
