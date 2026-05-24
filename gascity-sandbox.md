@@ -17,6 +17,20 @@ Single source of truth for what's actually been done. **Update this every time y
 progress** so the next agent (or a future you, after compaction) doesn't have to
 reverse-engineer state from git history.
 
+- **2026-05-24** — **Beads provider flipped from `file` to `bd` (dolt-backed).** PR #1
+  review: user wants dolt on their laptop, so the sandbox should match. Dolt runs
+  purely local via `managed_city` mode — no remote required. Updated §1a rule #4
+  and added a new §1b explaining the local-only persistence model: dolt for beads
+  (SQL server + prefix scoping, not worktrees), plain `git init` for rigs, frequent
+  fork-repo commits for config state, runtime state gitignored. **§3 inventory and §5
+  setup plan still need updating** to add the dolt + bd install step — deferred
+  pending the docker-container decision (see below).
+- **2026-05-24** — **Pending decision: dockerize the whole install (user's proposal).**
+  User suggested in PR #1 review running everything inside a docker container
+  (ubuntu base) inside the sandbox, so the Dockerfile becomes the laptop
+  deliverable. Explicitly tagged "don't implement without discussing." Response on
+  PR thread is in progress; defer §3/§5 updates until this is settled because they
+  shift substantially under a docker model.
 - **2026-05-24** — Fixed an ambiguity in §1 "operating model" diagram (PR #1 review
   comment): the previous diagram made it look like the main agent and gascity were on
   separate hosts. They are not — main agent, gascity controller, and all role agents
@@ -223,9 +237,14 @@ Gas City separates configuration into three layers:
    don't bake env-specific values in.
 3. **Pack must not assume Linux.** Avoid Linux-only shell idioms in any `exec` blocks.
    `bash` is fine (Mac has it); GNU-only flags (`sed -i`, `date --iso-8601`) are not.
-4. **Pack must not assume Beads provider.** Default to `file` Beads (works everywhere,
-   no dolt install). If you want to demonstrate the `bd` provider, do it in a separate,
-   clearly-labeled "advanced" variant of the city.toml.
+4. **Beads provider: use `bd` (dolt-backed), not `file`.** The user wants dolt on the
+   laptop, so the sandbox should match. Dolt works purely locally — `managed_city`
+   mode runs a per-city dolt SQL server with no remote required. Install `dolt` + `bd`
+   in the sandbox (no apt root needed; both ship as static binaries from GitHub
+   releases). The dolt data lives under `.beads/` (gitignored runtime state). Reserve
+   the `file` provider for an explicitly-labeled "lightweight tutorial" variant if you
+   build one. See §1b for the local-only persistence strategy and the worktree
+   clarification.
 5. **city.toml is allowed to have laptop-specific values**, but every such value must
    be commented with what to change. Example:
    ```toml
@@ -239,6 +258,82 @@ Gas City separates configuration into three layers:
 **Test of portability:** the agent should be able to mentally simulate "user runs
 these N commands on a fresh macOS laptop with Homebrew" and predict success. If you
 can't, the pack isn't done yet.
+
+---
+
+## 1b. Local-only persistence — dolt, rigs, and the worktree question
+
+The user raised this in PR #1 review:
+
+> "I DO want to use dolt by the time it reaches my laptop. Is it possible for you to
+> create a local git repo (no remote) on the sandbox, and have all agents access it
+> using worktrees? [...] As a matter of fact, you should probably do this with the
+> sample rigs as well. But make sure to frequently save in the main repo their state
+> if it is important for configuration. Since gascity relies so much on git repos the
+> local ones should work — just be aware that everything is transient on the sandbox,
+> so frequent commits to the main repo and pushes to the remote is a good idea."
+
+The user's instinct is correct (local-only stores work, frequent fork-repo commits
+preserve config), but the mechanism is slightly different from what the comment
+sketches. Here's the actual model.
+
+### Dolt (the Beads backend)
+- **Dolt is NOT git.** It's a SQL database with git-*like* operations (init, commit,
+  branch, push). A dolt store lives in `.dolt/` (or under `.beads/` for our use).
+- **It runs purely local with no remote configured.** Gascity's default `managed_city`
+  mode launches a per-city dolt SQL server, port recorded in `.beads/dolt-server.port`,
+  no DoltHub or external server needed. (Source: lago-morph deep dive §6, citing
+  `internal/beads/contract/files.go`.)
+- **Multi-agent access is via SQL connections to that one server**, not worktrees.
+  All rigs share the same physical dolt server; isolation is by bead-ID prefix per
+  rig (e.g. `riga-h2t`, `rigb-gne`). The rig's `.beads/config.yaml` sets
+  `gc.endpoint_origin: inherited_city`.
+- **Therefore, no worktrees are involved on the beads/dolt side.** The "local repo,
+  no remote, multiple readers/writers" pattern the user wants is achieved by dolt's
+  SQL server + prefix scoping. Just install dolt + bd and let the default behavior
+  do this for us.
+- **Laptop transition is clean:** the user can keep using local-only dolt on their
+  laptop, OR add a remote (DoltHub, DoltLab, or self-hosted dolt remote) without
+  changing the pack — that's a city.toml / `.beads/config.yaml` concern.
+
+### Rigs (which ARE git repos)
+- **Rigs are plain git repos** added to the city via `gc rig add <path>`. They are
+  separate registered directories, not gascity-managed worktrees.
+- **Local-only (no remote) is fine for sandbox demonstration rigs.** Just
+  `git init` them, never `git remote add`. On the laptop the user can add a GitHub
+  remote without affecting pack design.
+- **Git worktrees are not a gascity SDK feature** — per the lago-morph deep dive §15,
+  worktrees are a pattern that *pack scripts* can use from `pre_start` hooks if a
+  pack wants to demonstrate parallel agent work on the same codebase. Don't introduce
+  worktrees in v1 of the pack; if a later demo calls for "two role agents working
+  different branches of the same rig in parallel," reach for `git worktree add` from
+  a pack script then.
+- **Concurrent multi-agent access to a single rig directory** (without worktrees) is
+  fine for sequential or coordinated work; problematic if two agents simultaneously
+  do `git checkout` to different branches. Pack design should match this: prefer
+  patterns where one agent owns the rig's working tree at a time, or use worktrees
+  when truly parallel.
+
+### What gets committed to the fork repo (the durability strategy)
+The sandbox is ephemeral, so anything you want to survive container reclaim must live
+in `arazzo-engine-fork` (this repo, branch `claude/sandbox-independent-sessions-gScht`).
+
+| Lives in fork repo (committed) | Lives in sandbox only (gitignored or transient) |
+|---|---|
+| `gascity-sandbox/pack/**` — the deliverable | `gascity-sandbox/gascity/` — upstream clone |
+| `gascity-sandbox/cities/bright-lights/city.toml` — reference deployment | `gascity-sandbox/cities/bright-lights/.gc/` — runtime state |
+| `gascity-sandbox/rigs/*/` source files (committed snapshots) | `.beads/dolt-server.port`, tmux sockets, log files |
+| This handoff doc, READMEs | `.beads/dolt/` — dolt SQL data (can be re-derived) |
+
+**Frequent-commit rule:** any time a meaningful pack/config change lands and is
+validated, commit and push. Treat the fork repo as a journal of "configuration state
+worth preserving" — runtime state and re-derivable data stay out.
+
+**Re-derivable vs not:** dolt bead data is *technically* re-derivable from orders in
+the pack + a fresh run, but in practice if you're mid-debug and the container dies,
+you lose your investigation context. If that becomes painful, we can revisit (e.g.
+periodic `dolt dump` of the bead DB to a SQL file committed under
+`gascity-sandbox/snapshots/`). Don't pre-build that until it bites.
 
 ---
 
