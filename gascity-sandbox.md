@@ -37,28 +37,35 @@ are settled unless the user reopens them.
   - **On the laptop:** all of those are GitHub repos. The user clones them, builds
     the docker image, runs the container. If the container dies, the user spins up
     a fresh one and re-clones — the GitHub repos are the source of truth.
-- **Beads provider: dolt (`bd`), not `file` — but with a clarification you must
-  resolve.** User wants dolt so the "container dies → re-clone → resume" model works
-  via dolt's git-like ops. **Important reality check:** dolt is NOT git and dolt's
-  remote protocol is NOT compatible with GitHub. Dolt remotes live on DoltHub,
-  DoltLab, or a self-hosted dolt server. So either: (a) use Beads `file` provider
-  (plain JSON files in `.beads/` — trivially git-trackable, pushable to GitHub) and
-  drop the "dolt" framing, or (b) keep Beads `bd`/dolt and add a dolt remote (not
-  GitHub) for the re-clone story. **See §1b for the full explanation; flag to the
-  user before building.**
+- **Beads provider: `bd` (dolt-backed), pushed to a GitHub remote via dolt's git-
+  remote support.** Dolt v1.81.10 (Feb 2026) added native support for using a Git
+  remote as a Dolt remote — built specifically to keep Beads/Gas Town users on
+  GitHub when they migrated from SQLite to Dolt. Commands: `dolt remote add origin
+  git@github.com:.../...git` then `dolt push origin main`; clone via `dolt clone
+  https://github.com/.../...git`. Requires `git` binary on PATH in the container.
+  See §1b for the full mechanism, sources, and caveats (notably ~45–80s push time
+  for small DBs). **An earlier draft of this doc incorrectly claimed dolt remotes
+  couldn't be GitHub — that was wrong and has been corrected.**
 - **Agent's role.** User will NOT operate the city. They will not open a shell,
   attach tmux, or run `bd create`. The agent does all of it. The user is the product
   manager; their only interface is chat with the agent. See §1.
-- **Docker auth wiring (open question — needs user input).** Inside the container,
-  `claude` needs credentials. In the prior sandbox, the parent agent's claude proc
-  was auth'd via an `ANTHROPIC_BASE_URL` proxy set on the host (no API key visible).
-  On the user's laptop, no such proxy exists — claude needs `ANTHROPIC_API_KEY`.
-  Per the user's question ("how are you switching between proxy URL and API key —
-  are those interchangeable?"): they are **complementary, not interchangeable.**
-  `BASE_URL` says *where* to send requests; `API_KEY` is the *credential*.
-  Recommendation surfaced to user: standardize the Dockerfile on `ANTHROPIC_API_KEY`
-  as the primary input, accept `ANTHROPIC_BASE_URL` as an optional override for
-  proxied/sandboxed environments. **Confirm with user before building.**
+- **Docker auth: OIDC via shared Windows token cache (user's choice, decided).**
+  Host is Windows. The user will share their Windows OIDC token cache with the docker
+  container by mounting it as a volume. **This is the user's problem to solve on
+  their Windows machine later with a local Claude Code session — it is NOT yours to
+  set up on the sandbox.** What you SHOULD do:
+  - Design the Dockerfile and docker-compose.yml to accept an OIDC token cache
+    mount at a documented path (e.g. `/root/.claude/oidc-cache` or
+    `/opt/auth/oidc-cache` — pick one and stick with it).
+  - Add clear comments in the Dockerfile / compose file / city.toml explaining what
+    the user will need to wire up locally (mount source path, env vars, etc.).
+  - For sandbox development, just rely on the inherited `ANTHROPIC_BASE_URL` proxy
+    — that's enough to validate the pack works. Don't try to install or test OIDC
+    flows on the sandbox; it will fail and isn't the target environment.
+  - Verify that `claude` inside the container with the OIDC cache *would* work in
+    principle (read Claude Code docs on OIDC auth and confirm the env vars / cache
+    paths it expects), but leave the actual end-to-end test for the user's local
+    Windows session.
 - **Compose vs plain docker (open question — recommended compose).** Volume mounts
   get verbose with `docker run`. docker-compose is cleaner for README. User said
   *"Compose is fine if that makes things easier to see."* — interpret as approved.
@@ -74,9 +81,10 @@ are settled unless the user reopens them.
   authenticated subprocesses transparently. Re-verify in your sandbox.
 
 **Open work for you:**
-- Resolve the dolt-vs-github confusion (see §1b) with the user before building.
-- Resolve the auth-wiring decision (`ANTHROPIC_API_KEY` as primary) with the user.
-- Confirm pack-runtime-location preference.
+- Confirm pack-runtime-location preference (baked-into-image vs mounted from host).
+- Read Claude Code's OIDC auth docs so the Dockerfile / compose comments accurately
+  describe what the user will mount and which env vars to set. Don't try to run
+  OIDC end-to-end on the sandbox.
 - Read the lago-morph Gas City deep dive end-to-end (local copy at
   `./reference-only/lago-morph-13-gas-city-deep-dive.md` — see §10).
 - Outbound network confirmation from the sandbox (`curl` go.dev and github.com).
@@ -201,13 +209,11 @@ the time this work is "done," the user's brand-new deliverable repo should conta
   bugs are not.
 
 **The "easy to switch to github remotes later" requirement** (user stated): inside
-the container, rigs use local `git init` repos and (provisionally) dolt uses its
-local managed-city mode. The pack and city.toml should be structured so that
-*flipping to GitHub remotes is a config change*, not a code change — e.g. rig URLs
-in city.toml expressed as variables that default to local paths but accept
-`git@github.com:...` overrides. **Caveat:** dolt's own remotes are not GitHub —
-see §1b for the "what does 'github for dolt' actually mean?" discussion you need to
-have with the user.
+the container, rigs are local `git init` repos with GitHub remotes added, and the
+dolt bead store similarly uses dolt's git-remote support (Dolt v1.81.10+) to push
+to GitHub. The pack and city.toml should be structured so rig URLs and the bead
+store URL are variables in city.toml — same config schema on sandbox and laptop,
+just different URL values. See §1b for the full mechanism.
 
 ### Interpreted objectives (in priority order)
 
@@ -268,9 +274,11 @@ Gas City separates configuration into three layers:
 **Portability rules that the configuration must follow:**
 
 1. **Pack must not assume any absolute path.** No `/home/user/...`, no `/opt/...`.
-2. **Pack must not assume `ANTHROPIC_BASE_URL` is set.** The laptop will auth
-   differently. If the pack needs a specific auth mode, document it in the pack README,
-   don't bake env-specific values in.
+2. **Pack must not assume any specific auth mechanism.** Different environments use
+   different auth: the sandbox uses `ANTHROPIC_BASE_URL` proxy; the user's Windows
+   laptop will mount an OIDC token cache into the container (see §0). The pack
+   itself should be auth-agnostic; auth wiring belongs in the Dockerfile /
+   docker-compose.yml / city.toml with clear comments.
 3. **Pack must not assume Linux.** Avoid Linux-only shell idioms in any `exec` blocks.
    `bash` is fine (Mac has it); GNU-only flags (`sed -i`, `date --iso-8601`) are not.
 4. **Beads provider: use `bd` (dolt-backed), not `file`.** The user wants dolt on the
@@ -297,9 +305,9 @@ can't, the pack isn't done yet.
 
 ---
 
-## 1b. Persistence: local repos on sandbox, GitHub on laptop, and the dolt question
+## 1b. Persistence: local repos on sandbox, GitHub on laptop, dolt with git remotes
 
-### The user's mental model (must satisfy this)
+### The user's mental model (must satisfy this — and it works as-stated)
 
 The user articulated this clearly:
 
@@ -311,107 +319,121 @@ The user articulated this clearly:
 > a git back-end. That's why I'm asking you to use the git back end for dolt, so that
 > it transfers easily to my laptop."
 
-Translated:
+**This plan works exactly as the user described.** A prior agent (this author) initially
+got this wrong — claimed dolt remotes were incompatible with GitHub. That was incorrect.
+Correction:
 
-- **Sandbox loop:** agent creates local git repos for the pack, rigs, and bead store.
-  Agent commits frequently and pushes to GitHub remotes (the deliverable repo + one
-  GitHub repo per artifact, or all-in-one — see below).
-- **Laptop loop:** user clones those GitHub repos, runs `docker build && docker run`,
-  Gas City comes up using cloned state. If the container dies, user `docker rm`s it,
-  spins up a fresh one, re-clones if needed, and resumes.
-- **GitHub is the source of truth** for everything that must survive a container
-  death.
+### Dolt git-remote support — the actual feature
 
-### What works as-the-user-imagines vs. what doesn't
+As of **Dolt v1.81.10 (announced 2026-02-13, technical deep-dive 2026-02-19)**, Dolt
+supports **Git remotes as Dolt remotes**. This feature was built specifically to
+support the Beads / Gas Town transition from SQLite to Dolt, so that existing users
+could continue syncing data through Git remotes without provisioning DoltHub
+credentials.
 
-**Works straightforwardly:**
+Sources:
+- https://www.dolthub.com/blog/2026-02-13-announcing-git-remote-support-in-dolt/
+- https://www.dolthub.com/blog/2026-02-19-supporting-git-remotes-as-dolt-remotes/
+- https://docs.dolthub.com/concepts/dolt/git/remotes
+
+Mechanism:
+
+```bash
+# Inside the dolt database directory
+dolt remote add origin git@github.com:<user>/<repo>.git
+# Verify
+dolt remote -v
+# Push the dolt database to GitHub (just like git)
+dolt push origin main
+# On a fresh host, clone it back
+dolt clone https://github.com/<user>/<repo>.git
+```
+
+Requirements / caveats:
+- **Hard dependency on the `git` binary being on PATH** inside the container.
+  Dolt shells out to git for remote operations. The Dockerfile already needs `git`
+  for gascity anyway, so this costs nothing extra — just make sure both are
+  installed.
+- **Push performance:** ~45–80s per push for small databases per
+  https://github.com/dolthub/dolt/issues/10537. Acceptable for a learning/demo pack
+  pushed periodically; might pinch on tight inner loops.
+- Both SSH (`git@github.com:...`) and HTTPS (`https://github.com/...`) forms work.
+
+### What this means for the architecture
+
+The user's original plan is now the obvious one — **everything in GitHub, dolt
+included**:
 
 | Artifact | Sandbox storage | Laptop storage | Survives `docker rm`? |
 |---|---|---|---|
-| Pack (`pack.toml`, prompts, formulas) | Local `git init` in sandbox | GitHub repo | Yes — re-clone from GitHub |
-| Rigs (each a git repo) | Local `git init` in sandbox | One GitHub repo per rig | Yes — re-clone from GitHub |
-| `city.toml` template | Lives next to the Dockerfile | Same | Yes — re-clone from GitHub |
-| Dockerfile, README | Lives in deliverable repo | Same | Yes — re-clone from GitHub |
+| Pack (`pack.toml`, prompts, formulas) | Local `git init` in sandbox; `git push origin main` to GitHub frequently | GitHub repo | Yes — `git clone` from GitHub |
+| Rigs (each a git repo) | Local `git init` + GitHub remote, push frequently | One GitHub repo per rig | Yes — `git clone` from GitHub |
+| `city.toml` template | Lives in the deliverable repo | Same | Yes — `git clone` from GitHub |
+| Dockerfile, README | Lives in the deliverable repo | Same | Yes — `git clone` from GitHub |
+| **Dolt bead store** | Local dolt repo + `dolt remote add origin git@github.com:...` + `dolt push` frequently | GitHub repo (separate, dolt-managed) | **Yes — `dolt clone` from GitHub** |
 
-**Does NOT work the way the user described — needs decision:**
+Container-death-and-resume on the laptop:
+1. `docker rm` the dead container.
+2. Spin up a fresh container from the image.
+3. Inside the container, re-clone whatever the city.toml expects: `git clone` for the
+   pack and rigs, `dolt clone` for the bead store.
+4. `gc start` — the controller picks up where it left off because the bead store has
+   all in-flight work.
 
-| Artifact | The misconception | The reality |
-|---|---|---|
-| **Dolt bead store** | "dolt has a git back-end, pushes to github, re-clone like other repos" | Dolt is **not** git. Dolt has its **own** git-LIKE operations (`dolt init`, `dolt commit`, `dolt push`) and its **own** remote protocol. Dolt remotes are DoltHub, DoltLab, or self-hosted dolt servers — **NOT GitHub.** You cannot `git clone` a dolt store; you can `dolt clone` from a dolt remote. |
+This is exactly the user's vision. No separate dolt remote, no DoltHub, no two
+source-of-truth systems — GitHub holds everything.
 
-This is the **single most important thing to resolve with the user before building**.
-They asked for "dolt with a git back-end" — that's not a real thing. There are two
-genuine paths that satisfy the "container dies → re-clone → resume" goal:
+### Implementation notes for the Dockerfile
 
-**Path A (recommended): use Beads `file` provider, not `bd`/dolt.**
-- Beads has two providers: `bd` (uses dolt under the hood) and `file` (plain JSON
-  files in `.beads/`).
-- `file` mode produces ordinary files that ARE plain-git-trackable and can live in
-  a GitHub repo, satisfying the user's "re-clone from github" model exactly.
-- Trade-off: less performant, no SQL queries against bead history, no dolt-style
-  branching of bead state. For a learning-and-demonstration pack, these probably
-  don't matter.
-- Per lago-morph deep dive §6: `file` provider is recommended for "tutorials,
-  lightweight" use — which is exactly our case.
+- Install `dolt` v1.81.10+ in the image (any newer version is fine).
+- Install `git`, `openssh-client`, and configure SSH access to GitHub (the user will
+  mount or `docker cp` their SSH key, or the container will use a deploy key /
+  HTTPS-with-token — surface this choice to the user before building).
+- The `city.toml` should express each rig and the bead store with their GitHub URLs.
+  On first container start, an entrypoint script does `git clone` / `dolt clone` if
+  the local paths don't exist; on subsequent starts (volume mount survival), it
+  fetches updates.
 
-**Path B: keep `bd`/dolt, and add a dolt remote (NOT github).**
-- Run a dolt remote alongside the city (e.g., on DoltHub free tier, or a
-  self-hosted `dolt sql-server --remotesapi-port`).
-- Container death → re-clone via `dolt clone <dolt-remote>` instead of
-  `git clone <github>`. Two source-of-truth systems instead of one.
-- Doesn't match the user's stated "all github" model — more moving parts on the
-  laptop side.
+### Rigs (plain git repos — unchanged from before)
 
-**Recommendation to surface to the user:** Path A. Frame it as "we get exactly what
-you asked for — everything in github, re-clone on container death — by using the
-`file` Beads provider instead of dolt." Reserve dolt for a later "advanced" demo if
-they want to show off branching workflows. The user previously rejected `file` Beads,
-but that was before they articulated the GitHub-as-source-of-truth model; given that
-goal, `file` is the natural fit.
-
-### Rigs (plain git repos)
 - Each rig is a regular git repo added to the city via `gc rig add <path>`.
-- **On sandbox:** `git init` each rig locally; `git remote add origin
-  git@github.com:<user>/<rig-name>.git`; push frequently.
-- **On laptop:** user `git clone`s each rig repo into a directory the container will
-  mount or copy in.
+- Sandbox: `git init` each rig locally, `git remote add origin git@github.com:...`,
+  push frequently.
+- Laptop: user `git clone`s each rig repo into a directory the container clones at
+  start.
 - **Git worktrees are NOT a gascity SDK feature** (lago-morph deep dive §15). Don't
-  introduce them in v1 of the pack; if a later demo wants two agents on different
-  branches of the same rig simultaneously, *pack scripts* can call `git worktree add`
-  from a `pre_start` hook. Defer until needed.
+  introduce them in v1 of the pack; pack scripts can call `git worktree add` from a
+  `pre_start` hook if a later demo needs parallel agent work on the same rig.
 
 ### Layout sketch (one possible structure for the deliverable repo)
 
 ```
-<deliverable-repo>/                   ← user-created github repo, ubuntu-base Dockerfile
-├── Dockerfile                        ← image build
-├── docker-compose.yml                ← brings the container up (recommended; user OK'd)
-├── README.md                         ← single source of laptop bring-up instructions
+<deliverable-repo>/                   ← user-created GitHub repo
+├── Dockerfile                        ← ubuntu base, installs Go, gascity, dolt, git, tmux, claude
+├── docker-compose.yml                ← brings the container up (compose preferred per user)
+├── README.md                         ← one-screen "how to run on your laptop"
+├── entrypoint.sh                     ← clones rigs + dolt bead store from GitHub on first run
 ├── pack/                             ← the portable pack (agents, formulas, prompts)
 │   ├── pack.toml
 │   ├── prompts/
 │   └── formulas/
-├── city.toml.example                 ← deployment-specific template
+├── city.toml.example                 ← deployment-specific template; rig/bead URLs as variables
 ├── reference-only/                   ← supporting docs (NOT consumed by gascity)
 │   └── lago-morph-13-gas-city-deep-dive.md
-├── gascity-sandbox.md                ← this handoff doc (delete after first read if desired)
-└── rigs/                             ← rig templates OR pointers to separate rig repos
-    └── ...
+├── gascity-sandbox.md                ← this handoff doc (optional retention)
+└── (rigs and bead store live in SEPARATE GitHub repos referenced from city.toml)
 ```
 
-Whether rigs are subdirs of this repo or separate sibling repos is a structural call
-worth surfacing to the user. Separate repos match their "all github repositories"
-phrasing better; subdirs of one repo is simpler to demo. Recommend separate repos —
-it forces you to design the city.toml around rig URLs (the GitHub-flip portability
-property in §1).
+Separate GitHub repos for each rig and for the bead store match the user's "all
+GitHub repositories" phrasing and force you to design `city.toml` around URLs (the
+GitHub-flip portability property).
 
 ### Sandbox-side scratch dir vs deliverable repo
 
-While developing on the sandbox, the agent will inevitably create scratch files,
-clone gascity upstream, build go binaries, etc. **These don't belong in the
-deliverable repo.** Use a separate sandbox scratch path (e.g., `/workspace/scratch/`)
-that's gitignored or simply outside the deliverable repo's tree. The only things
-that get committed to the deliverable repo are the artifacts in the layout above.
+While developing on the sandbox, the agent will create scratch files, clone gascity
+upstream, build go binaries, etc. **These don't belong in the deliverable repo.**
+Use `/workspace/scratch/` (or any non-deliverable path) for scratch. The deliverable
+repo only contains the artifacts in the layout above.
 
 ---
 
